@@ -64,6 +64,14 @@ impl Default for PaintApp {
 }
 
 impl PaintApp {
+    fn clear_all(&mut self) {
+        if self.lines.is_empty() { return; }
+        let indices = (0..self.lines.len()).collect();
+        let lines = self.lines.clone();
+        self.execute(PaintAction::Delete(indices, lines));
+        self.selected_indices.clear();
+    }
+
     fn get_line_rect(&self, idx: usize) -> Rect {
         if let Some(line) = self.lines.get(idx) {
             let mut r = Rect::NOTHING;
@@ -82,17 +90,13 @@ impl PaintApp {
 
     fn paste(&mut self) {
         if self.clipboard.is_empty() { return; }
-        
         let offset = Vec2::splat(20.0);
         let mut new_lines = self.clipboard.clone();
-        
         for line in &mut new_lines {
             for p in &mut line.points { *p += offset; }
         }
-        
         self.execute(PaintAction::Create(new_lines.clone()));
         self.clipboard = new_lines; 
-        
         let start_idx = self.lines.len() - self.clipboard.len();
         self.selected_indices = (start_idx..self.lines.len()).collect();
     }
@@ -177,7 +181,7 @@ impl PaintApp {
     }
 }
 
-// --- FONCTIONS GLOBALES ---
+// --- UTILITAIRES ---
 
 fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let l2 = a.distance_sq(b);
@@ -223,32 +227,30 @@ impl eframe::App for PaintApp {
 
             ui.label("Édition");
             ui.horizontal(|ui| {
-                if ui.button("↩").on_hover_text("Undo").clicked() { self.undo(); }
-                if ui.button("↪").on_hover_text("Redo").clicked() { self.redo(); }
+                if ui.button("↩").on_hover_text("Annuler").clicked() { self.undo(); }
+                if ui.button("↪").on_hover_text("Rétablir").clicked() { self.redo(); }
                 ui.separator();
-                if ui.button("✂").on_hover_text("Copy").clicked() { self.copy_selected(); }
-                if ui.button("📋").on_hover_text("Paste").clicked() { self.paste(); }
+                if ui.button("✂").on_hover_text("Copier").clicked() { self.copy_selected(); }
+                if ui.button("📋").on_hover_text("Coller").clicked() { self.paste(); }
             });
 
             ui.separator();
             ui.label("Outils");
-            let old_mode = self.mode.clone();
             ui.selectable_value(&mut self.mode, BrushMode::Freehand, "✏ Dessin");
             ui.selectable_value(&mut self.mode, BrushMode::StraightLine, "📏 Ligne");
             ui.selectable_value(&mut self.mode, BrushMode::Eraser, "🧽 Gomme");
             ui.selectable_value(&mut self.mode, BrushMode::Select, "🖱 Sélection");
 
-            if self.mode != BrushMode::Select && old_mode == BrushMode::Select { self.selected_indices.clear(); }
-
             ui.separator();
             ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0).text("Taille"));
             ui.color_edit_button_srgba(&mut self.brush_color);
 
-            // --- SECTION ACTIONS DE SÉLECTION ---
             if !self.selected_indices.is_empty() {
                 ui.separator();
-                ui.label(format!("Sélection: {} objet(s)", self.selected_indices.len()));
+                ui.label(format!("Sélection: {}", self.selected_indices.len()));
+                
                 ui.vertical_centered_justified(|ui| {
+                    // BOUTON COULEUR
                     if ui.button("🎨 Appliquer Couleur").clicked() {
                         let old = self.selected_indices.iter().filter_map(|&i| self.lines.get(i).cloned()).collect();
                         let new = self.selected_indices.iter().filter_map(|&i| {
@@ -258,11 +260,28 @@ impl eframe::App for PaintApp {
                         }).collect();
                         self.execute(PaintAction::Modify(self.selected_indices.clone(), old, new));
                     }
-                    if ui.button("🗑 Supprimer").clicked() {
-                        self.delete_selected();
+                    
+                    // NOUVEAU BOUTON TAILLE
+                    if ui.button("📏 Appliquer Taille").clicked() {
+                        let old = self.selected_indices.iter().filter_map(|&i| self.lines.get(i).cloned()).collect();
+                        let new = self.selected_indices.iter().filter_map(|&i| {
+                            let mut l = self.lines.get(i).cloned()?;
+                            l.width = self.brush_size;
+                            Some(l)
+                        }).collect();
+                        self.execute(PaintAction::Modify(self.selected_indices.clone(), old, new));
                     }
+
+                    if ui.button("🗑 Supprimer").clicked() { self.delete_selected(); }
                 });
             }
+
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                ui.add_space(10.0);
+                if ui.add_enabled(!self.lines.is_empty(), egui::Button::new("💣 Tout effacer")).clicked() {
+                    self.clear_all();
+                }
+            });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -300,14 +319,11 @@ impl eframe::App for PaintApp {
                     },
                     BrushMode::Select => {
                         if response.drag_started() {
-                            let mut hit = self.selected_indices.iter().find(|&&i| 
-                                self.get_line_rect(i).contains(pos)).cloned();
-                            
+                            let mut hit = self.selected_indices.iter().find(|&&i| self.get_line_rect(i).contains(pos)).cloned();
                             if hit.is_none() {
                                 hit = self.lines.iter().enumerate().find(|(_, l)| 
                                     l.points.windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < 10.0)).map(|(i, _)| i);
                             }
-
                             if let Some(idx) = hit {
                                 if !self.selected_indices.contains(&idx) { self.selected_indices = vec![idx]; }
                                 self.is_dragging_items = true;
@@ -377,9 +393,5 @@ impl eframe::App for PaintApp {
 }
 
 fn main() -> eframe::Result<()> {
-    eframe::run_native(
-        "Rust Paint Pro",
-        eframe::NativeOptions::default(),
-        Box::new(|_cc| Box::new(PaintApp::default())),
-    )
+    eframe::run_native("Rust Paint Pro", eframe::NativeOptions::default(), Box::new(|_cc| Box::new(PaintApp::default())))
 }
