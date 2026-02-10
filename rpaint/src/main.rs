@@ -7,11 +7,31 @@ use app::PaintApp;
 use eframe::egui;
 use egui::{Color32, Rect, Shape, Stroke, Vec2};
 use models::BrushMode;
-use network::DrawingMessage;
+use network::{DrawingMessage, NetworkEvent};
 use utils::{dist_to_segment, draw_dashed_rect};
 
 impl eframe::App for PaintApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Poll network events
+        let events = self.network.poll_events();
+        for event in events {
+            match event {
+                NetworkEvent::MessageReceived(msg) => {
+                    self.handle_network_message(msg);
+                }
+                NetworkEvent::PeerDiscovered(peer) => {
+                    println!("[UI] Peer discovered: {}", peer);
+                }
+                NetworkEvent::PeerExpired(peer) => {
+                    println!("[UI] Peer expired: {}", peer);
+                }
+                _ => {}
+            }
+        }
+        
+        // Request repaint to keep polling network events
+        ctx.request_repaint();
+
         ctx.input(|i| {
             if i.modifiers.command && i.key_pressed(egui::Key::Z) {
                 self.undo();

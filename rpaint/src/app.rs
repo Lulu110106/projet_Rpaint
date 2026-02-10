@@ -1,6 +1,6 @@
 use egui::{Color32, Pos2, Rect, Vec2};
 use crate::models::{Line, PaintAction, BrushMode};
-use crate::network::NetworkManager;
+use crate::network::{NetworkManager, DrawingMessage};
 
 pub struct PaintApp {
     pub lines: Vec<Line>,
@@ -198,5 +198,50 @@ impl PaintApp {
             return r.expand(line.width / 2.0 + 5.0);
         }
         Rect::NOTHING
+    }
+
+    pub fn handle_network_message(&mut self, msg: DrawingMessage) {
+        match msg {
+            DrawingMessage::DrawLine { points, color, width } => {
+                let egui_color = Color32::from_rgba_unmultiplied(
+                    ((color >> 16) & 0xFF) as u8,
+                    ((color >> 8) & 0xFF) as u8,
+                    (color & 0xFF) as u8,
+                    ((color >> 24) & 0xFF) as u8,
+                );
+                let line = Line {
+                    points: points.iter().map(|(x, y)| Pos2::new(*x, *y)).collect(),
+                    color: egui_color,
+                    width,
+                };
+                self.lines.push(line);
+                println!("[App] Received and added line from network");
+            }
+            DrawingMessage::Delete { indices } => {
+                let mut sorted = indices.clone();
+                sorted.sort_by(|a, b| b.cmp(a));
+                for idx in sorted {
+                    if idx < self.lines.len() {
+                        self.lines.remove(idx);
+                    }
+                }
+                println!("[App] Deleted lines from network");
+            }
+            DrawingMessage::Move { indices, delta_x, delta_y } => {
+                for idx in indices {
+                    if let Some(line) = self.lines.get_mut(idx) {
+                        for p in &mut line.points {
+                            *p += Vec2::new(delta_x, delta_y);
+                        }
+                    }
+                }
+                println!("[App] Moved lines from network");
+            }
+            DrawingMessage::Clear => {
+                self.lines.clear();
+                println!("[App] Cleared canvas from network");
+            }
+            _ => {}
+        }
     }
 }
