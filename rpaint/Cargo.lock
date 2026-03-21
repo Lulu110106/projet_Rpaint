@@ -2119,6 +2119,7 @@ name = "rust_paint"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "winapi",
 ]
 
 [[package]]
