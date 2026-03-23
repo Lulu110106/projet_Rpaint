@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rpaint — Dessine sans limites</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0d0d0d;
+    --paper: #f5f0e8;
+    --red: #e63224;
+    --blue: #1a4bff;
+    --yellow: #ffd700;
+    --green: #2ecc5f;
+    --grid: rgba(0,0,0,0.06);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    overflow-x: hidden;
+    cursor: crosshair;
+  }
+
+  /* ── GRID TEXTURE ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 48px;
+    background: var(--paper);
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .nav-logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2rem;
+    letter-spacing: 2px;
+    color: var(--ink);
+    text-decoration: none;
+    position: relative;
+  }
+  .nav-logo span {
+    color: var(--red);
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 36px;
+    list-style: none;
+  }
+  .nav-links a {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--ink);
+    text-decoration: none;
+    transition: color .2s;
+  }
+  .nav-links a:hover { color: var(--red); }
+
+  .nav-btn {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    background: var(--ink);
+    color: var(--paper);
+    border: 2px solid var(--ink);
+    padding: 10px 22px;
+    cursor: crosshair;
+    transition: background .2s, color .2s;
+    text-decoration: none;
+  }
+  .nav-btn:hover {
+    background: var(--red);
+    border-color: var(--red);
+  }
+
+  /* ── HERO ── */
+  #hero {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 120px 48px 60px;
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  .hero-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--red);
+    margin-bottom: 20px;
+  }
+
+  .hero-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(6rem, 16vw, 14rem);
+    line-height: 0.88;
+    letter-spacing: -2px;
+    color: var(--ink);
+    position: relative;
+    z-index: 2;
+    animation: slideUp .8s cubic-bezier(.16,1,.3,1) both;
+  }
+  .hero-title .outline {
+    -webkit-text-stroke: 3px var(--ink);
+    color: transparent;
+  }
+  .hero-title .filled { color: var(--ink); }
+
+  .hero-sub {
+    font-size: 1.25rem;
+    font-weight: 300;
+    max-width: 460px;
+    margin-top: 32px;
+    line-height: 1.65;
+    animation: slideUp .8s .15s cubic-bezier(.16,1,.3,1) both;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 16px;
+    margin-top: 44px;
+    flex-wrap: wrap;
+    animation: slideUp .8s .25s cubic-bezier(.16,1,.3,1) both;
+  }
+
+  .btn-primary {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.82rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    background: var(--red);
+    color: #fff;
+    border: 2px solid var(--red);
+    padding: 16px 36px;
+    text-decoration: none;
+    cursor: crosshair;
+    transition: background .2s, color .2s, transform .15s;
+  }
+  .btn-primary:hover {
+    background: var(--ink);
+    border-color: var(--ink);
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 var(--red);
+  }
+
+  .btn-secondary {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.82rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    background: transparent;
+    color: var(--ink);
+    border: 2px solid var(--ink);
+    padding: 16px 36px;
+    text-decoration: none;
+    cursor: crosshair;
+    transition: background .2s, color .2s, transform .15s;
+  }
+  .btn-secondary:hover {
+    background: var(--ink);
+    color: var(--paper);
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+
+  /* Blobs décoratifs */
+  .hero-blob {
+    position: absolute;
+    right: -60px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 560px;
+    height: 560px;
+    opacity: .08;
+    animation: rotate 30s linear infinite;
+    z-index: 1;
+  }
+
+  /* Canvas preview mockup */
+  .hero-canvas {
+    position: absolute;
+    right: 80px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 480px;
+    height: 360px;
+    border: 3px solid var(--ink);
+    background: #fff;
+    box-shadow: 10px 10px 0 var(--ink);
+    overflow: hidden;
+    animation: slideRight .9s .3s cubic-bezier(.16,1,.3,1) both;
+    z-index: 2;
+  }
+
+  .canvas-toolbar {
+    height: 36px;
+    background: var(--ink);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .toolbar-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+  .toolbar-dot:nth-child(1) { background: var(--red); }
+  .toolbar-dot:nth-child(2) { background: var(--yellow); }
+  .toolbar-dot:nth-child(3) { background: var(--green); }
+  .canvas-title-bar {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: rgba(255,255,255,.5);
+    margin-left: auto;
+    letter-spacing: 1px;
+  }
+
+  .canvas-body {
+    display: flex;
+    height: calc(100% - 36px);
+  }
+
+  .canvas-sidebar {
+    width: 44px;
+    border-right: 2px solid var(--ink);
+    background: #f0ece0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
+    gap: 8px;
+  }
+
+  .tool-icon {
+    width: 28px; height: 28px;
+    border: 1.5px solid var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    cursor: crosshair;
+    transition: background .15s;
+    background: #fff;
+  }
+  .tool-icon.active { background: var(--ink); color: var(--paper); }
+  .tool-icon:hover { background: var(--red); color: #fff; border-color: var(--red); }
+
+  .canvas-draw {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .canvas-draw svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* paint stroke animation */
+  .stroke {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+    animation: draw 3s 1s cubic-bezier(.4,0,.2,1) forwards;
+  }
+  .stroke2 { animation-delay: 1.8s; animation-duration: 2s; }
+  .stroke3 { animation-delay: 2.8s; animation-duration: 1.5s; }
+  .fill-anim {
+    opacity: 0;
+    animation: fadeIn 0.5s 3.5s forwards;
+  }
+
+  /* ── STATS BAND ── */
+  .stats-band {
+    position: relative;
+    z-index: 1;
+    background: var(--ink);
+    color: var(--paper);
+    display: flex;
+    justify-content: space-around;
+    padding: 28px 48px;
+    border-top: 3px solid var(--red);
+    border-bottom: 3px solid var(--red);
+  }
+
+  .stat-item {
+    text-align: center;
+  }
+  .stat-num {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.8rem;
+    letter-spacing: 2px;
+    color: var(--yellow);
+    line-height: 1;
+  }
+  .stat-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: .6;
+    margin-top: 4px;
+  }
+
+  /* ── SECTION GÉNÉRIQUE ── */
+  section {
+    position: relative;
+    z-index: 1;
+    padding: 100px 48px;
+  }
+
+  .section-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--red);
+    margin-bottom: 14px;
+  }
+
+  .section-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(3rem, 6vw, 5.5rem);
+    line-height: .95;
+    letter-spacing: -1px;
+    margin-bottom: 40px;
+  }
+
+  /* ── FEATURES ── */
+  #features {
+    background: #fff;
+    border-top: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0;
+  }
+
+  .feature-card {
+    border: 1.5px solid var(--ink);
+    padding: 44px 36px;
+    position: relative;
+    transition: transform .2s, box-shadow .2s;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 4px;
+    background: var(--accent, var(--red));
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform .3s;
+  }
+  .feature-card:hover::before { transform: scaleX(1); }
+  .feature-card:hover {
+    transform: translate(-3px, -3px);
+    box-shadow: 5px 5px 0 var(--ink);
+  }
+
+  .feature-icon {
+    font-size: 2.4rem;
+    margin-bottom: 20px;
+    display: block;
+    line-height: 1;
+  }
+
+  .feature-num {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 4rem;
+    color: rgba(0,0,0,.04);
+    position: absolute;
+    top: 12px; right: 20px;
+    letter-spacing: -2px;
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .feature-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.6rem;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    color: var(--ink);
+  }
+
+  .feature-desc {
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: #555;
+    font-weight: 300;
+  }
+
+  /* ── HOW IT WORKS ── */
+  #how {
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 760px;
+  }
+
+  .step {
+    display: flex;
+    gap: 40px;
+    align-items: flex-start;
+    padding: 40px 0;
+    border-bottom: 1.5px dashed rgba(0,0,0,.15);
+    opacity: 0;
+    transform: translateX(-30px);
+    transition: opacity .5s, transform .5s;
+  }
+  .step.visible { opacity: 1; transform: none; }
+  .step:last-child { border-bottom: none; }
+
+  .step-number {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 5rem;
+    line-height: 1;
+    color: var(--red);
+    flex-shrink: 0;
+    width: 80px;
+    text-align: right;
+  }
+
+  .step-content {}
+  .step-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.8rem;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+  .step-desc {
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: #555;
+    font-weight: 300;
+  }
+
+  /* ── PALETTE SECTION ── */
+  #palette {
+    background: var(--ink);
+    color: var(--paper);
+    border-bottom: 2px solid var(--red);
+  }
+
+  #palette .section-label { color: var(--yellow); }
+  #palette .section-title { color: var(--paper); }
+
+  .palette-swatches {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 40px;
+  }
+
+  .swatch {
+    width: 64px;
+    height: 64px;
+    border: 2px solid rgba(255,255,255,.15);
+    transition: transform .2s, box-shadow .2s;
+    cursor: crosshair;
+  }
+  .swatch:hover {
+    transform: scale(1.2) rotate(-3deg);
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    z-index: 2;
+    border-color: #fff;
+  }
+
+  .palette-desc {
+    font-size: 1rem;
+    line-height: 1.75;
+    font-weight: 300;
+    max-width: 520px;
+    opacity: .8;
+    margin-top: 16px;
+  }
+
+  .palette-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    align-items: center;
+  }
+
+  /* Fake screenshot */
+  .app-screenshot {
+    border: 2.5px solid rgba(255,255,255,.25);
+    background: #1a1a1a;
+    padding: 16px;
+    position: relative;
+  }
+
+  .app-screenshot-inner {
+    aspect-ratio: 4/3;
+    background: #2a2a2a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pixel-art {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 1px;
+    width: 200px;
+    height: 200px;
+  }
+
+  .px { width: 100%; aspect-ratio: 1; }
+
+  /* ── DOWNLOAD ── */
+  #download {
+    border-top: 2px solid var(--ink);
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .download-bg {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 20px,
+      rgba(0,0,0,.025) 20px,
+      rgba(0,0,0,.025) 40px
+    );
+    pointer-events: none;
+  }
+
+  .download-box {
+    position: relative;
+    z-index: 2;
+    max-width: 680px;
+    margin: 0 auto;
+  }
+
+  .download-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(3.5rem, 8vw, 7rem);
+    line-height: .9;
+    margin-bottom: 24px;
+  }
+
+  .download-desc {
+    font-size: 1.05rem;
+    line-height: 1.75;
+    font-weight: 300;
+    color: #555;
+    margin-bottom: 44px;
+  }
+
+  .download-options {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+
+  .dl-btn {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.78rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 32px;
+    border: 2px solid var(--ink);
+    text-decoration: none;
+    color: var(--ink);
+    cursor: crosshair;
+    transition: all .2s;
+    background: #fff;
+  }
+  .dl-btn:hover {
+    background: var(--ink);
+    color: var(--paper);
+    transform: translate(-3px, -3px);
+    box-shadow: 5px 5px 0 var(--red);
+  }
+
+  .dl-btn .dl-os { font-size: 1.2rem; }
+
+  .version-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    opacity: .45;
+    text-transform: uppercase;
+  }
+
+  /* ── TEAM ── */
+  #team {
+    border-top: 2px solid var(--ink);
+    background: #f0ece0;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .team-layout {
+    display: flex;
+    gap: 60px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .team-text { flex: 1; min-width: 280px; }
+  .team-text p {
+    font-size: 1rem;
+    line-height: 1.8;
+    font-weight: 300;
+    color: #444;
+    margin-bottom: 16px;
+  }
+
+  .team-badge {
+    display: inline-block;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.2rem;
+    letter-spacing: 3px;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 8px 20px;
+    margin-top: 10px;
+  }
+
+  .team-visual {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .avatar-card {
+    width: 120px;
+    text-align: center;
+  }
+
+  .avatar {
+    width: 80px;
+    height: 80px;
+    border: 2.5px solid var(--ink);
+    border-radius: 0;
+    margin: 0 auto 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    background: #fff;
+    transition: transform .2s, box-shadow .2s;
+  }
+  .avatar-card:hover .avatar {
+    transform: translate(-2px, -2px) rotate(-3deg);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+  .avatar-name {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+  .avatar-role {
+    font-size: 0.78rem;
+    color: #888;
+    margin-top: 2px;
+  }
+
+  /* ── FOOTER ── */
+  footer {
+    position: relative;
+    z-index: 1;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 40px 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    border-top: 3px solid var(--red);
+  }
+
+  .footer-logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.2rem;
+    letter-spacing: 2px;
+  }
+  .footer-logo span { color: var(--red); }
+
+  .footer-copy {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1.5px;
+    opacity: .4;
+    text-transform: uppercase;
+  }
+
+  .footer-links {
+    display: flex;
+    gap: 24px;
+    list-style: none;
+  }
+  .footer-links a {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.4);
+    text-decoration: none;
+    transition: color .2s;
+  }
+  .footer-links a:hover { color: var(--yellow); }
+
+  /* ── ANIMATIONS ── */
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(40px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes slideRight {
+    from { opacity: 0; transform: translateY(-50%) translateX(60px); }
+    to { opacity: 1; transform: translateY(-50%) translateX(0); }
+  }
+  @keyframes rotate {
+    to { transform: translateY(-50%) rotate(360deg); }
+  }
+  @keyframes draw {
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes fadeIn {
+    to { opacity: 1; }
+  }
+
+  /* ── CURSOR PAINT ── */
+  .paint-cursor {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9999;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--red);
+    transform: translate(-50%, -50%);
+    mix-blend-mode: multiply;
+    transition: transform .1s;
+  }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--paper); }
+  ::-webkit-scrollbar-thumb { background: var(--ink); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--red); }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 900px) {
+    nav { padding: 14px 24px; }
+    .nav-links { display: none; }
+    #hero { padding: 100px 24px 60px; }
+    .hero-canvas { display: none; }
+    section { padding: 70px 24px; }
+    .palette-layout { grid-template-columns: 1fr; }
+    .stats-band { padding: 20px 24px; flex-wrap: wrap; gap: 20px; }
+    footer { padding: 28px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Paint cursor -->
+<div class="paint-cursor" id="paintCursor"></div>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo"><span>R</span>paint</a>
+  <ul class="nav-links">
+    <li><a href="#features">Fonctionnalités</a></li>
+    <li><a href="#how">Comment ça marche</a></li>
+    <li><a href="#team">Équipe</a></li>
+  </ul>
+  <a href="#download" class="nav-btn">Télécharger</a>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <p class="hero-tag">par Genesis · Logiciel de dessin libre</p>
+  <h1 class="hero-title">
+    <span class="filled">R</span><span class="outline">paint</span>
+  </h1>
+  <p class="hero-sub">Le logiciel de dessin pensé pour tous — des créatifs du quotidien aux artistes passionnés. Simple comme Paint, puissant comme votre imagination.</p>
+  <div class="hero-actions">
+    <a href="#download" class="btn-primary">↓ Télécharger gratuitement</a>
+    <a href="#features" class="btn-secondary">Découvrir →</a>
+  </div>
+
+  <!-- Canvas Mockup -->
+  <div class="hero-canvas">
+    <div class="canvas-toolbar">
+      <div class="toolbar-dot"></div>
+      <div class="toolbar-dot"></div>
+      <div class="toolbar-dot"></div>
+      <span class="canvas-title-bar">Rpaint — sans titre.rp</span>
+    </div>
+    <div class="canvas-body">
+      <div class="canvas-sidebar">
+        <div class="tool-icon active" title="Pinceau">✏️</div>
+        <div class="tool-icon" title="Gomme">◻</div>
+        <div class="tool-icon" title="Formes">▲</div>
+        <div class="tool-icon" title="Seau">◆</div>
+        <div class="tool-icon" title="Texte">T</div>
+        <div class="tool-icon" title="Sélection">⊹</div>
+        <div class="tool-icon" title="Pipette">◉</div>
+        <div class="tool-icon" title="Zoom">⊕</div>
+      </div>
+      <div class="canvas-draw">
+        <svg viewBox="0 0 436 324" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Ciel gradient -->
+          <rect width="436" height="324" fill="#e8f4ff"/>
+          <!-- Soleil -->
+          <circle class="fill-anim" cx="360" cy="60" r="36" fill="#ffd700" opacity="0"/>
+          <!-- Montagne -->
+          <polygon class="fill-anim" points="0,324 180,80 360,324" fill="#c8dde8" opacity="0"/>
+          <polygon class="fill-anim" points="140,324 300,100 436,200 436,324" fill="#b0ccd8" opacity="0"/>
+          <!-- Herbe -->
+          <rect class="fill-anim" x="0" y="260" width="436" height="64" fill="#7ec85a" opacity="0"/>
+          <!-- Chemin tracé -->
+          <path class="stroke" d="M 40 280 Q 120 240 200 260 Q 280 280 380 240" stroke="#e63224" stroke-width="4" fill="none" stroke-linecap="round"/>
+          <path class="stroke stroke2" d="M 80 200 Q 160 160 220 180 T 380 160" stroke="#1a4bff" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <path class="stroke stroke3" d="M 50 300 L 100 250 L 160 280 L 220 240 L 300 270" stroke="#2ecc5f" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<div class="stats-band">
+  <div class="stat-item">
+    <div class="stat-num">20+</div>
+    <div class="stat-label">Outils de dessin</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-num">100%</div>
+    <div class="stat-label">Gratuit & Open</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-num">16M</div>
+    <div class="stat-label">Couleurs disponibles</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-num">3</div>
+    <div class="stat-label">Plateformes</div>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<section id="features">
+  <p class="section-label">// Fonctionnalités</p>
+  <h2 class="section-title">Tout ce dont<br>vous avez besoin.</h2>
+  <div class="features-grid">
+
+    <div class="feature-card" style="--accent:#e63224;">
+      <span class="feature-icon">✏️</span>
+      <span class="feature-num">01</span>
+      <h3 class="feature-title">Pinceaux & Outils</h3>
+      <p class="feature-desc">Plus de 20 outils de dessin : crayon, pinceau, aérographe, gomme, formes géométriques, texte. Chaque outil dispose de réglages fins de taille et d'opacité.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#1a4bff;">
+      <span class="feature-icon">🎨</span>
+      <span class="feature-num">02</span>
+      <h3 class="feature-title">Palette de Couleurs</h3>
+      <p class="feature-desc">Accédez à 16 millions de couleurs via le sélecteur RVB/HSL, sauvegardez vos palettes personnalisées, et utilisez la pipette pour prélever n'importe quelle teinte.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#2ecc5f;">
+      <span class="feature-icon">🗂️</span>
+      <span class="feature-num">03</span>
+      <h3 class="feature-title">Calques</h3>
+      <p class="feature-desc">Organisez vos créations en calques indépendants. Réordonnez, fusionnez, masquez — un flux de travail non-destructif pour des créations plus libres.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#ffd700;">
+      <span class="feature-icon">🔄</span>
+      <span class="feature-num">04</span>
+      <h3 class="feature-title">Annulation infinie</h3>
+      <p class="feature-desc">Historique illimité d'actions. Revenez en arrière autant de fois que nécessaire avec Ctrl+Z. Explorez, expérimentez sans crainte d'erreur.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#e63224;">
+      <span class="feature-icon">📐</span>
+      <span class="feature-num">05</span>
+      <h3 class="feature-title">Formes & Vecteurs</h3>
+      <p class="feature-desc">Tracez des lignes droites, rectangles, ellipses, polygones et courbes de Bézier. Idéal pour créer des icônes, logos ou illustrations précises.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#1a4bff;">
+      <span class="feature-icon">💾</span>
+      <span class="feature-num">06</span>
+      <h3 class="feature-title">Export Multi-format</h3>
+      <p class="feature-desc">Sauvegardez en PNG, JPG, BMP, GIF ou dans le format natif .rp. Exportez avec ou sans fond transparent, à la résolution de votre choix.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#2ecc5f;">
+      <span class="feature-icon">🔍</span>
+      <span class="feature-num">07</span>
+      <h3 class="feature-title">Zoom & Navigation</h3>
+      <p class="feature-desc">Zoomez jusqu'au pixel près pour un travail détaillé. Le mode pixel art bénéficie d'une grille dédiée pour des créations rétro pixel perfect.</p>
+    </div>
+
+    <div class="feature-card" style="--accent:#ffd700;">
+      <span class="feature-icon">⚡</span>
+      <span class="feature-num">08</span>
+      <h3 class="feature-title">Ultra léger</h3>
+      <p class="feature-desc">Moins de 15 Mo d'installation. Lance en moins d'une seconde. Rpaint tourne même sur les machines les plus modestes sans ralentissement.</p>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <p class="section-label">// Comment ça marche</p>
+  <h2 class="section-title">Créer<br>en 3 étapes.</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-number">01</div>
+      <div class="step-content">
+        <h3 class="step-title">Ouvrez un nouveau canvas</h3>
+        <p class="step-desc">Choisissez la taille de votre toile numérique : format standard, photo, pixel art, ou dimensions personnalisées. Rpaint s'adapte à tous vos projets, des vignettes aux grandes illustrations.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-number">02</div>
+      <div class="step-content">
+        <h3 class="step-title">Choisissez vos outils</h3>
+        <p class="step-desc">La barre d'outils rassemble tout ce qu'il faut à portée de clic. Sélectionnez votre outil, ajustez la taille du pinceau et choisissez votre couleur dans la palette ou via le sélecteur avancé.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-number">03</div>
+      <div class="step-content">
+        <h3 class="step-title">Dessinez & Exportez</h3>
+        <p class="step-desc">Laissez libre cours à votre créativité. Quand votre œuvre est prête, exportez-la en un clic dans le format de votre choix — PNG, JPG, ou le format natif Rpaint pour continuer plus tard.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PALETTE SECTION -->
+<section id="palette">
+  <div class="palette-layout">
+    <div>
+      <p class="section-label">// La couleur au cœur</p>
+      <h2 class="section-title">Une palette<br>sans limite.</h2>
+      <p class="palette-desc">16 millions de couleurs. Des palettes personnalisées à sauvegarder. Une pipette pour capturer n'importe quelle teinte. Le sélecteur HSL pour des dégradés parfaits. Rpaint donne aux couleurs toute la place qu'elles méritent.</p>
+      <div class="palette-swatches">
+        <div class="swatch" style="background:#e63224;"></div>
+        <div class="swatch" style="background:#1a4bff;"></div>
+        <div class="swatch" style="background:#ffd700;"></div>
+        <div class="swatch" style="background:#2ecc5f;"></div>
+        <div class="swatch" style="background:#ff6b35;"></div>
+        <div class="swatch" style="background:#9b59b6;"></div>
+        <div class="swatch" style="background:#1abc9c;"></div>
+        <div class="swatch" style="background:#34495e;"></div>
+        <div class="swatch" style="background:#e91e8c;"></div>
+        <div class="swatch" style="background:#fff;border-color:rgba(255,255,255,.3);"></div>
+        <div class="swatch" style="background:#0d0d0d;"></div>
+        <div class="swatch" style="background:linear-gradient(135deg,#e63224,#1a4bff);"></div>
+      </div>
+    </div>
+    <div class="app-screenshot">
+      <div class="app-screenshot-inner">
+        <!-- Pixel art face -->
+        <svg viewBox="0 0 160 160" width="200" height="200" xmlns="http://www.w3.org/2000/svg" style="image-rendering:pixelated;">
+          <!-- background -->
+          <rect width="160" height="160" fill="#1a1a2e"/>
+          <!-- head shape -->
+          <rect x="40" y="20" width="80" height="100" rx="8" fill="#f5c5a3"/>
+          <!-- hair -->
+          <rect x="40" y="20" width="80" height="28" rx="6" fill="#8B4513"/>
+          <!-- eyes -->
+          <rect x="58" y="58" width="14" height="14" rx="2" fill="#1a4bff"/>
+          <rect x="88" y="58" width="14" height="14" rx="2" fill="#1a4bff"/>
+          <!-- pupils -->
+          <rect x="63" y="62" width="5" height="5" rx="1" fill="#0d0d0d"/>
+          <rect x="93" y="62" width="5" height="5" rx="1" fill="#0d0d0d"/>
+          <!-- nose -->
+          <rect x="75" y="80" width="10" height="6" rx="3" fill="#d4a090"/>
+          <!-- smile -->
+          <rect x="62" y="96" width="36" height="6" rx="3" fill="#e63224"/>
+          <rect x="65" y="100" width="30" height="4" rx="2" fill="#c0392b"/>
+          <!-- blush -->
+          <rect x="48" y="88" width="18" height="8" rx="4" fill="#ffb3b3" opacity=".5"/>
+          <rect x="94" y="88" width="18" height="8" rx="4" fill="#ffb3b3" opacity=".5"/>
+          <!-- body -->
+          <rect x="50" y="116" width="60" height="40" rx="6" fill="#1a4bff"/>
+          <!-- collar -->
+          <rect x="70" y="116" width="20" height="12" rx="4" fill="#fff"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DOWNLOAD -->
+<section id="download">
+  <div class="download-bg"></div>
+  <div class="download-box">
+    <p class="section-label">// Téléchargement</p>
+    <h2 class="download-title">Prêt à<br>dessiner ?</h2>
+    <p class="download-desc">Rpaint est entièrement gratuit. Téléchargez-le en un clic, installez en 30 secondes, et commencez à créer immédiatement.</p>
+    <div class="download-options">
+      <a href="#" class="dl-btn">
+        <span class="dl-os">🪟</span>
+        Windows
+      </a>
+      <a href="#" class="dl-btn">
+        <span class="dl-os">🍎</span>
+        macOS
+      </a>
+      <a href="#" class="dl-btn">
+        <span class="dl-os">🐧</span>
+        Linux
+      </a>
+    </div>
+    <p class="version-tag">v1.0.0 — gratuit &amp; open source — par Genesis</p>
+  </div>
+</section>
+
+<!-- TEAM -->
+<section id="team">
+  <p class="section-label">// L'équipe</p>
+  <h2 class="section-title">Genesis.</h2>
+  <div class="team-layout">
+    <div class="team-text">
+      <p>Nous sommes <strong>Genesis</strong>, une équipe de développeurs et de designers passionnés, réunis autour d'une conviction simple : créer de bons outils doit rester accessible à tous.</p>
+      <p>Rpaint est notre premier projet commun — un logiciel de dessin gratuit, léger, sans publicité ni abonnement. Juste l'essentiel, bien fait.</p>
+      <p>On croit à l'open source, à la simplicité et à la créativité sans barrière.</p>
+      <span class="team-badge">Genesis — 2026</span>
+    </div>
+    <div class="team-visual">
+      <div class="avatar-card">
+        <div class="avatar">🧑‍💻</div>
+        <div class="avatar-name">Timoteo</div>
+      </div>
+      <div class="avatar-card">
+        <div class="avatar">🧑‍💻</div>
+        <div class="avatar-name">Lucas</div>
+      </div>
+      <div class="avatar-card">
+        <div class="avatar">🧑‍💻</div>
+        <div class="avatar-name">Aurélien</div>
+      </div>
+      <div class="avatar-card">
+        <div class="avatar">🧑‍💻</div>
+        <div class="avatar-name">Léo</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo"><span>R</span>paint</div>
+  <ul class="footer-links">
+    <li><a href="#">GitHub</a></li>
+    <li><a href="#">Licence</a></li>
+    <li><a href="#">Contact</a></li>
+  </ul>
+  <p class="footer-copy">© 2026 Genesis · Open source </p>
+</footer>
+
+<script>
+  // Paint cursor
+  const cursor = document.getElementById('paintCursor');
+  const colors = ['#e63224','#1a4bff','#ffd700','#2ecc5f','#ff6b35','#9b59b6'];
+  let colorIdx = 0;
+  document.addEventListener('mousemove', e => {
+    cursor.style.left = e.clientX + 'px';
+    cursor.style.top = e.clientY + 'px';
+  });
+  document.addEventListener('click', () => {
+    colorIdx = (colorIdx + 1) % colors.length;
+    cursor.style.background = colors[colorIdx];
+    // Splash
+    cursor.style.transform = 'translate(-50%,-50%) scale(2.5)';
+    setTimeout(() => cursor.style.transform = 'translate(-50%,-50%) scale(1)', 200);
+  });
+
+  // Scroll reveal for steps
+  const steps = document.querySelectorAll('.step');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach((e, i) => {
+      if (e.isIntersecting) {
+        setTimeout(() => e.target.classList.add('visible'), i * 120);
+      }
+    });
+  }, { threshold: 0.2 });
+  steps.forEach(s => observer.observe(s));
+
+  // Nav active scroll
+  const sections = document.querySelectorAll('section[id], #download');
+  const navLinks = document.querySelectorAll('.nav-links a');
+  window.addEventListener('scroll', () => {
+    let current = '';
+    sections.forEach(s => {
+      if (window.scrollY >= s.offsetTop - 120) current = s.id;
+    });
+    navLinks.forEach(a => {
+      a.style.color = a.getAttribute('href') === '#' + current ? 'var(--red)' : '';
+    });
+  });
+</script>
+</body>
+</html>
