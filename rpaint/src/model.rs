@@ -32,6 +32,7 @@ pub struct PaintApp {
     pub clipboard: Vec<Line>,
     pub is_dragging_items: bool,
     pub drag_accumulated_delta: Vec2,
+    pub custom_palette: Vec<Color32>,
 }
 
 impl Default for PaintApp {
@@ -41,7 +42,7 @@ impl Default for PaintApp {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             mode: BrushMode::Freehand,
-            brush_color: Color32::from_rgb(0, 150, 255),
+            brush_color: Color32::from_rgb(0, 120, 255),
             brush_size: 4.0,
             current_line: Vec::new(),
             selected_indices: Vec::new(),
@@ -50,6 +51,7 @@ impl Default for PaintApp {
             clipboard: Vec::new(),
             is_dragging_items: false,
             drag_accumulated_delta: Vec2::ZERO,
+            custom_palette: Vec::new(),
         }
     }
 }

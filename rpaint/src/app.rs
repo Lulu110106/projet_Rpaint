@@ -39,10 +39,6 @@ impl eframe::App for PaintApp {
 
             ui.separator();
             ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0).text("Taille"));
-            ui.scope(|ui| {
-                ui.spacing_mut().interact_size = egui::vec2(160.0, 20.0); 
-                ui.color_edit_button_srgba(&mut self.brush_color);
-            });
             let palette = [
                 egui::Color32::RED,
                 egui::Color32::from_rgb(255, 165, 0), // orange
@@ -53,6 +49,20 @@ impl eframe::App for PaintApp {
                 egui::Color32::BLACK,
                 egui::Color32::WHITE,
             ];
+            ui.horizontal(|ui| {
+                ui.scope(|ui| {
+                    ui.spacing_mut().interact_size = egui::vec2(160.0, 20.0);
+                    ui.color_edit_button_srgba(&mut self.brush_color);
+                });
+
+                // Bouton étoile
+                if ui.button("⭐").on_hover_text("Favoris").clicked()
+                    && !palette.contains(&self.brush_color)
+                    && !self.custom_palette.contains(&self.brush_color)
+                {
+                    self.custom_palette.push(self.brush_color);
+                }
+            });
             ui.horizontal_wrapped(|ui| {
                 for color in &palette {
                     let size = egui::vec2(24.0, 24.0);
@@ -63,6 +73,22 @@ impl eframe::App for PaintApp {
                         painter.rect_stroke(response.rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
                     }
 
+                    painter.rect_filled(response.rect, 2.0, *color);
+
+                    if response.clicked() {
+                        self.brush_color = *color;
+                    }
+                }
+            });
+            if self.custom_palette.len() != 0 {ui.separator();}
+            ui.horizontal_wrapped(|ui| {
+                for color in &self.custom_palette {
+                    let size = egui::vec2(24.0, 24.0);
+                    let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
+
+                    if self.brush_color == *color {
+                        painter.rect_stroke(response.rect, 2.0, egui::Stroke::new(2.0, egui::Color32::GRAY));
+                    }
                     painter.rect_filled(response.rect, 2.0, *color);
 
                     if response.clicked() {
