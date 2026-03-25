@@ -3,6 +3,8 @@ use crate::model::{PaintApp, BrushMode, Line, PaintAction};
 use crate::logic::{dist_to_segment};
 use crate::ui_tools::{draw_dashed_rect};
 
+
+
 impl eframe::App for PaintApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // --- 1. GESTION DES RACCOURCIS CLAVIERS ---
@@ -16,7 +18,7 @@ impl eframe::App for PaintApp {
 
         // --- 2. BARRE D'OUTILS (GAUCHE) ---
         egui::SidePanel::left("toolbar").show(ctx, |ui| {
-            ui.heading("🎨 Rust Paint");
+            ui.heading("🎨 RPaint");
             ui.separator();
 
             ui.label("Édition");
@@ -37,7 +39,37 @@ impl eframe::App for PaintApp {
 
             ui.separator();
             ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0).text("Taille"));
-            ui.color_edit_button_srgba(&mut self.brush_color);
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size = egui::vec2(160.0, 20.0); 
+                ui.color_edit_button_srgba(&mut self.brush_color);
+            });
+            let palette = [
+                egui::Color32::RED,
+                egui::Color32::from_rgb(255, 165, 0), // orange
+                egui::Color32::YELLOW,
+                egui::Color32::GREEN,
+                egui::Color32::BLUE,
+                egui::Color32::from_rgb(128, 0, 128), // violet
+                egui::Color32::BLACK,
+                egui::Color32::WHITE,
+            ];
+            ui.horizontal_wrapped(|ui| {
+                for color in &palette {
+                    let size = egui::vec2(24.0, 24.0);
+                    let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
+
+                    // Bordure si couleur sélectionnée
+                    if self.brush_color == *color {
+                        painter.rect_stroke(response.rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+                    }
+
+                    painter.rect_filled(response.rect, 2.0, *color);
+
+                    if response.clicked() {
+                        self.brush_color = *color;
+                    }
+                }
+            });
 
             // Menu contextuel si sélection active
             if !self.selected_indices.is_empty() {

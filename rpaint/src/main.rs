@@ -7,7 +7,7 @@ use model::PaintApp;
 
 fn main() -> eframe::Result<()> {
     eframe::run_native(
-        "Rust Paint Pro",
+        "RPaint Pro",
         eframe::NativeOptions::default(),
         Box::new(|_cc| Box::new(PaintApp::default())),
     )
