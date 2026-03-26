@@ -637,6 +637,187 @@
     text-transform: uppercase;
   }
 
+  /* ── INSTALL GUIDE ── */
+  .install-guide {
+    position: relative;
+    z-index: 2;
+    margin-top: 72px;
+    max-width: 820px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .install-guide-inner {
+    border: 2.5px solid var(--ink);
+    background: #fff;
+    box-shadow: 8px 8px 0 var(--ink);
+    padding: 52px 52px 44px;
+  }
+
+  .install-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.4rem;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    color: var(--ink);
+  }
+
+  .install-intro {
+    font-size: 0.95rem;
+    color: #666;
+    font-weight: 300;
+    line-height: 1.7;
+    margin-bottom: 40px;
+    max-width: 560px;
+  }
+
+  .install-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .install-step {
+    padding: 32px 0;
+    border-top: 1.5px dashed rgba(0,0,0,.15);
+  }
+  .install-step:first-child { border-top: none; padding-top: 0; }
+  .install-step:last-child { padding-bottom: 0; }
+
+  .install-step-header {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    margin-bottom: 12px;
+  }
+
+  .install-step-num {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2rem;
+    color: var(--red);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .install-step-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.35rem;
+    letter-spacing: .5px;
+    color: var(--ink);
+  }
+
+  .install-step-desc {
+    font-size: 0.9rem;
+    line-height: 1.7;
+    color: #555;
+    font-weight: 300;
+    margin-bottom: 14px;
+    max-width: 600px;
+  }
+
+  .code-block {
+    background: var(--ink);
+    border: 1.5px solid var(--ink);
+    margin: 14px 0;
+    overflow: hidden;
+  }
+
+  .code-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    border-bottom: 1px solid rgba(255,255,255,.1);
+    background: rgba(255,255,255,.05);
+  }
+
+  .code-lang {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: rgba(255,255,255,.35);
+  }
+
+  .copy-btn {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: transparent;
+    color: rgba(255,255,255,.4);
+    border: 1px solid rgba(255,255,255,.2);
+    padding: 3px 10px;
+    cursor: crosshair;
+    transition: color .2s, border-color .2s, background .2s;
+  }
+  .copy-btn:hover {
+    color: var(--yellow);
+    border-color: var(--yellow);
+    background: rgba(255,215,0,.07);
+  }
+  .copy-btn.copied {
+    color: var(--green);
+    border-color: var(--green);
+  }
+
+  .code-block pre {
+    padding: 16px 20px;
+    overflow-x: auto;
+  }
+
+  .code-block code {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.82rem;
+    color: #e8f0ff;
+    line-height: 1.7;
+    white-space: pre;
+  }
+
+  .install-note {
+    font-size: 0.82rem;
+    color: #888;
+    line-height: 1.6;
+    font-style: italic;
+    margin-top: 10px;
+  }
+
+  .inline-code {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.78rem;
+    background: rgba(0,0,0,.07);
+    padding: 1px 6px;
+    border-radius: 2px;
+  }
+
+  .install-link {
+    color: var(--blue);
+    font-weight: 500;
+    text-decoration: none;
+    border-bottom: 1.5px solid currentColor;
+    transition: color .2s;
+  }
+  .install-link:hover { color: var(--red); }
+
+  /* Download button overrides */
+  .dl-btn-main {
+    font-size: 0.9rem;
+    padding: 20px 44px;
+    background: var(--red);
+    color: #fff;
+    border-color: var(--red);
+    gap: 14px;
+  }
+  .dl-btn-main:hover {
+    background: var(--ink);
+    border-color: var(--ink);
+    box-shadow: 5px 5px 0 var(--red);
+  }
+
+  @media (max-width: 700px) {
+    .install-guide-inner { padding: 28px 20px; }
+  }
+
   /* ── TEAM ── */
   #team {
     border-top: 2px solid var(--ink);
@@ -920,7 +1101,7 @@
     <div class="feature-card" style="--accent:#2ecc5f;">
       <span class="feature-icon">🗂️</span>
       <span class="feature-num">03</span>
-      <h3 class="feature-title">Calques</h3>
+      <h3 class="feature-title">Calques (pas encore ajouté)</h3>
       <p class="feature-desc">Organisez vos créations en calques indépendants. Réordonnez, fusionnez, masquez — un flux de travail non-destructif pour des créations plus libres.</p>
     </div>
 
@@ -941,7 +1122,7 @@
     <div class="feature-card" style="--accent:#1a4bff;">
       <span class="feature-icon">💾</span>
       <span class="feature-num">06</span>
-      <h3 class="feature-title">Export Multi-format</h3>
+      <h3 class="feature-title">Export Multi-format (pas encore ajouté)</h3>
       <p class="feature-desc">Sauvegardez en PNG, JPG, BMP, GIF ou dans le format natif .rp. Exportez avec ou sans fond transparent, à la résolution de votre choix.</p>
     </div>
 
@@ -951,37 +1132,23 @@
       <h3 class="feature-title">Zoom & Navigation</h3>
       <p class="feature-desc">Zoomez jusqu'au pixel près pour un travail détaillé. Le mode pixel art bénéficie d'une grille dédiée pour des créations rétro pixel perfect.</p>
     </div>
-
-    <div class="feature-card" style="--accent:#ffd700;">
-      <span class="feature-icon">⚡</span>
-      <span class="feature-num">08</span>
-      <h3 class="feature-title">Ultra léger</h3>
-      <p class="feature-desc">Moins de 15 Mo d'installation. Lance en moins d'une seconde. Rpaint tourne même sur les machines les plus modestes sans ralentissement.</p>
-    </div>
   </div>
 </section>
 
 <!-- HOW IT WORKS -->
 <section id="how">
   <p class="section-label">// Comment ça marche</p>
-  <h2 class="section-title">Créer<br>en 3 étapes.</h2>
+  <h2 class="section-title">Créer<br>en 2  étapes.</h2>
   <div class="steps">
     <div class="step">
       <div class="step-number">01</div>
-      <div class="step-content">
-        <h3 class="step-title">Ouvrez un nouveau canvas</h3>
-        <p class="step-desc">Choisissez la taille de votre toile numérique : format standard, photo, pixel art, ou dimensions personnalisées. Rpaint s'adapte à tous vos projets, des vignettes aux grandes illustrations.</p>
-      </div>
-    </div>
-    <div class="step">
-      <div class="step-number">02</div>
       <div class="step-content">
         <h3 class="step-title">Choisissez vos outils</h3>
         <p class="step-desc">La barre d'outils rassemble tout ce qu'il faut à portée de clic. Sélectionnez votre outil, ajustez la taille du pinceau et choisissez votre couleur dans la palette ou via le sélecteur avancé.</p>
       </div>
     </div>
     <div class="step">
-      <div class="step-number">03</div>
+      <div class="step-number">02</div>
       <div class="step-content">
         <h3 class="step-title">Dessinez & Exportez</h3>
         <p class="step-desc">Laissez libre cours à votre créativité. Quand votre œuvre est prête, exportez-la en un clic dans le format de votre choix — PNG, JPG, ou le format natif Rpaint pour continuer plus tard.</p>
@@ -1052,22 +1219,95 @@
   <div class="download-box">
     <p class="section-label">// Téléchargement</p>
     <h2 class="download-title">Prêt à<br>dessiner ?</h2>
-    <p class="download-desc">Rpaint est entièrement gratuit. Téléchargez-le en un clic, installez en 30 secondes, et commencez à créer immédiatement.</p>
+    <p class="download-desc">Rpaint est entièrement gratuit et open source. Téléchargez les sources et lancez-le en quelques commandes.</p>
     <div class="download-options">
-      <a href="#" class="dl-btn">
-        <span class="dl-os">🪟</span>
-        Windows
-      </a>
-      <a href="#" class="dl-btn">
-        <span class="dl-os">🍎</span>
-        macOS
-      </a>
-      <a href="#" class="dl-btn">
-        <span class="dl-os">🐧</span>
-        Linux
+      <a href="https://github.com/Lulu110106/projet_Rpaint/archive/refs/heads/main.zip" download class="dl-btn dl-btn-main">
+        <span class="dl-os">⬇</span>
+        Télécharger Rpaint (.zip)
       </a>
     </div>
     <p class="version-tag">v1.0.0 — gratuit &amp; open source — par Genesis</p>
+  </div>
+
+  <!-- GUIDE D'INSTALLATION -->
+  <div class="install-guide">
+    <div class="install-guide-inner">
+      <p class="section-label" style="margin-bottom:10px;">// Guide d'installation</p>
+      <h3 class="install-title">Démarrer avec Rust &amp; Cargo</h3>
+      <p class="install-intro">Rpaint est développé en Rust. Suivez ces étapes pour installer l'environnement et lancer le projet.</p>
+
+      <div class="install-steps">
+
+        <!-- Étape 1 -->
+        <div class="install-step">
+          <div class="install-step-header">
+            <span class="install-step-num">01</span>
+            <span class="install-step-title">Installer Rust (version stable)</span>
+          </div>
+          <p class="install-step-desc">Rendez-vous sur <a href="https://rustup.rs" target="_blank" class="install-link">rustup.rs</a> et exécutez la commande suivante dans votre terminal. Elle installe <strong>rustup</strong>, le gestionnaire de toolchain, ainsi que Rust stable et <strong>Cargo</strong> automatiquement.</p>
+          <div class="code-block">
+            <div class="code-bar">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copier</button>
+            </div>
+            <pre><code>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
+          </div>
+          <p class="install-note">💡 Sur Windows, téléchargez et exécutez <strong>rustup-init.exe</strong> depuis <a href="https://rustup.rs" target="_blank" class="install-link">rustup.rs</a> à la place.</p>
+        </div>
+
+        <!-- Étape 2 -->
+        <div class="install-step">
+          <div class="install-step-header">
+            <span class="install-step-num">02</span>
+            <span class="install-step-title">Vérifier l'installation</span>
+          </div>
+          <p class="install-step-desc">Une fois l'installation terminée, rechargez votre terminal et vérifiez que Rust et Cargo sont bien disponibles :</p>
+          <div class="code-block">
+            <div class="code-bar">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copier</button>
+            </div>
+            <pre><code>rustc --version
+cargo --version</code></pre>
+          </div>
+          <p class="install-note">✅ Vous devriez voir quelque chose comme <code class="inline-code">rustc 1.x.x (stable)</code> et <code class="inline-code">cargo 1.x.x</code>.</p>
+        </div>
+
+        <!-- Étape 3 -->
+        <div class="install-step">
+          <div class="install-step-header">
+            <span class="install-step-num">03</span>
+            <span class="install-step-title">Décompresser &amp; accéder au projet</span>
+          </div>
+          <p class="install-step-desc">Extrayez l'archive téléchargée, puis ouvrez un terminal dans le dossier du projet :</p>
+          <div class="code-block">
+            <div class="code-bar">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copier</button>
+            </div>
+            <pre><code>cd projet_Rpaint-main</code></pre>
+          </div>
+        </div>
+
+        <!-- Étape 4 -->
+        <div class="install-step">
+          <div class="install-step-header">
+            <span class="install-step-num">04</span>
+            <span class="install-step-title">Lancer Rpaint</span>
+          </div>
+          <p class="install-step-desc">Compilez et démarrez Rpaint avec une seule commande. Cargo télécharge les dépendances, compile le projet et l'exécute automatiquement.</p>
+          <div class="code-block">
+            <div class="code-bar">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copier</button>
+            </div>
+            <pre><code>cargo run</code></pre>
+          </div>
+          <p class="install-note">🚀 La première compilation peut prendre quelques secondes. Les suivantes seront instantanées grâce au cache de Cargo.</p>
+        </div>
+
+      </div><!-- /install-steps -->
+    </div>
   </div>
 </section>
 
@@ -1097,7 +1337,7 @@
       </div>
       <div class="avatar-card">
         <div class="avatar">🧑‍💻</div>
-        <div class="avatar-name">Léo</div>
+        <div class="avatar-name">Noé</div>
       </div>
     </div>
   </div>
@@ -1107,7 +1347,7 @@
 <footer>
   <div class="footer-logo"><span>R</span>paint</div>
   <ul class="footer-links">
-    <li><a href="#">GitHub</a></li>
+    <li><a href="https://github.com/Lulu110106/projet_Rpaint" target="_blank">GitHub</a></li>
     <li><a href="#">Licence</a></li>
     <li><a href="#">Contact</a></li>
   </ul>
@@ -1115,6 +1355,16 @@
 </footer>
 
 <script>
+  // Copy code blocks
+  function copyCode(btn) {
+    const code = btn.closest('.code-block').querySelector('code').innerText;
+    navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = 'Copié ✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copier'; btn.classList.remove('copied'); }, 2000);
+    });
+  }
+
   // Paint cursor
   const cursor = document.getElementById('paintCursor');
   const colors = ['#e63224','#1a4bff','#ffd700','#2ecc5f','#ff6b35','#9b59b6'];
