@@ -22,6 +22,8 @@ pub async fn run(pseudo: &str) {
     let (tx, _) = broadcast::channel::<String>(256);
     let state = Arc::new(AppState { tx: tx.clone() });
     
+    print_local_ip();
+
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
@@ -46,6 +48,25 @@ pub async fn run(pseudo: &str) {
 
     axum::serve(listener, app).await.unwrap();
 }
+
+fn print_local_ip() {
+    use std::net::UdpSocket;
+    // Astuce : ouvrir un socket UDP sans envoyer de données
+    // permet de connaître l'IP locale utilisée pour joindre internet
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                println!("  IP locale : {}", addr.ip());
+                println!("  Les clients du même réseau lancent :");
+                println!("  cargo run -- --join {} <pseudo>", addr.ip());
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            }
+        }
+    }
+}
+
+
 
 #[warn(unused)]
 async fn start_tunnel() {
