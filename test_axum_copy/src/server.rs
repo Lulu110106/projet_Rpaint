@@ -21,19 +21,13 @@ pub async fn run(pseudo: &str) {
     let pseudo = pseudo.to_string();
     let (tx, _) = broadcast::channel::<String>(256);
     let state = Arc::new(AppState { tx: tx.clone() });
-
+    
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Serveur local démarré sur le port 3000");
-    println!("Création du tunnel public...\n");
-
-    // Lancer le tunnel localhost.run
-    tokio::spawn(async {
-        start_tunnel().await;
-    });
 
     // Stdin async du host
     let tx_stdin = tx.clone();
@@ -53,6 +47,7 @@ pub async fn run(pseudo: &str) {
     axum::serve(listener, app).await.unwrap();
 }
 
+#[warn(unused)]
 async fn start_tunnel() {
     let mut child = tokio::process::Command::new("ssh")
         .args([
@@ -85,7 +80,7 @@ async fn start_tunnel() {
 
     child.wait().await.ok();
 }
-
+#[warn(unused)]
 fn extract_url(line: &str) -> Option<String> {
     line.split_whitespace()
         .find(|s| s.starts_with("https://") || s.starts_with("http://"))
