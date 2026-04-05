@@ -48,8 +48,6 @@ pub struct PaintApp {
     pub incoming_draw_tx: mpsc::UnboundedSender<Line>,
     pub incoming_draw_rx: mpsc::UnboundedReceiver<Line>,
     pub outgoing_draw_tx: Option<mpsc::UnboundedSender<DrawLineEvent>>,
-    pub last_draw_send_time: f64,
-    pub last_draw_send_pos: Option<Pos2>,
 }
 
 impl Default for PaintApp {
@@ -82,8 +80,6 @@ impl Default for PaintApp {
             incoming_draw_tx,
             incoming_draw_rx,
             outgoing_draw_tx: None,
-            last_draw_send_time: 0.0,
-            last_draw_send_pos: None,
         }
     }
 }

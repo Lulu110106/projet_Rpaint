@@ -5,6 +5,7 @@ use crate::ui_tools::{draw_dashed_rect};
 use crate::server;
 use crate::client;
 use crate::events::DrawLineEvent;
+use std::time::Duration;
 
 
 impl eframe::App for PaintApp {
@@ -14,6 +15,7 @@ impl eframe::App for PaintApp {
             self.lines.push(line);
             received_any = true;
         }
+        ctx.request_repaint_after(Duration::from_millis(16));
         if received_any {
             ctx.request_repaint();
         }
@@ -251,11 +253,6 @@ impl eframe::App for PaintApp {
             if let Some(pos) = pointer {
                 match self.mode {
                     BrushMode::Freehand | BrushMode::StraightLine => {
-                        if self.mode == BrushMode::Freehand && response.drag_started() {
-                            self.last_draw_send_time = 0.0;
-                            self.last_draw_send_pos = None;
-                        }
-
                         if response.dragged() {
                             if self.mode == BrushMode::StraightLine {
                                 if self.current_line.is_empty() { self.current_line.push(pos); }
@@ -268,15 +265,7 @@ impl eframe::App for PaintApp {
                                 let len = self.current_line.len();
                                 let a = self.current_line[len - 2];
                                 let b = self.current_line[len - 1];
-                                let now = ctx.input(|i| i.time);
-                                let since_last = now - self.last_draw_send_time;
-                                let move_since_last = self.last_draw_send_pos.map(|p| p.distance_sq(b)).unwrap_or(f32::INFINITY);
-
-                                // Seuil hybride: envoi rapide si gros mouvement, sinon throttle leger.
-                                let should_send = move_since_last >= 16.0
-                                    || (since_last >= 0.012 && move_since_last >= 2.25);
-
-                                if a.distance_sq(b) > 0.25 && should_send {
+                                if a.distance_sq(b) > 0.25 {
                                     let segment = Line {
                                         points: vec![a, b],
                                         color: self.brush_color,
@@ -288,16 +277,12 @@ impl eframe::App for PaintApp {
                                     } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
                                         let _ = tx.send(DrawLineEvent::from_line(&segment));
                                     }
-
-                                    self.last_draw_send_time = now;
-                                    self.last_draw_send_pos = Some(b);
                                 }
                             }
                         } else if response.drag_released() && !self.current_line.is_empty() {
                             let points = std::mem::take(&mut self.current_line);
                             let line = Line { points, color: self.brush_color, width: self.brush_size };
                             self.execute(PaintAction::Create(vec![line]));
-                            self.last_draw_send_pos = None;
                         }
                     },
                     BrushMode::Eraser => {
