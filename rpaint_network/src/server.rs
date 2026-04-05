@@ -1,4 +1,5 @@
-use crate::events::ChatMessage;
+use crate::events::{DrawLineEvent, NetworkEvent};
+use crate::model::Line;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -9,17 +10,43 @@ use axum::{
     Router,
 };
 use futures::{SinkExt, StreamExt};
-use std::sync::Arc;
-use tokio::io::AsyncBufReadExt;
-use tokio::sync::broadcast;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{broadcast, oneshot};
+use tokio::sync::mpsc;
 
 struct AppState {
     tx: broadcast::Sender<String>,
 }
 
-pub async fn run(pseudo: &str) {
-    let pseudo = pseudo.to_string();
+static GLOBAL_TX: Mutex<Option<broadcast::Sender<String>>> = Mutex::new(None);
+static GLOBAL_LOCAL_DRAW_TX: Mutex<Option<mpsc::UnboundedSender<Line>>> = Mutex::new(None);
+
+pub fn set_local_draw_sink(tx: Option<mpsc::UnboundedSender<Line>>) {
+    if let Ok(mut sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
+        *sink = tx;
+    }
+}
+
+pub fn publish_draw_line(event: DrawLineEvent) -> bool {
+    let payload = match serde_json::to_string(&NetworkEvent::DrawLine(event)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let guard = GLOBAL_TX.lock();
+    if let Ok(locked) = guard {
+        if let Some(tx) = locked.as_ref() {
+            return tx.send(payload).is_ok();
+        }
+    }
+    false
+}
+
+pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
     let (tx, _) = broadcast::channel::<String>(256);
+    if let Ok(mut global) = GLOBAL_TX.lock() {
+        *global = Some(tx.clone());
+    }
     let state = Arc::new(AppState { tx: tx.clone() });
     
     print_local_ip();
@@ -31,22 +58,18 @@ pub async fn run(pseudo: &str) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Serveur local démarré sur le port 3000");
 
-    // Stdin async du host
-    let tx_stdin = tx.clone();
-    tokio::spawn(async move {
-        let stdin = tokio::io::stdin();
-        let mut lines = tokio::io::BufReader::new(stdin).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let content = line.trim().to_string();
-            if content.is_empty() { continue; }
-            let msg = ChatMessage { client_id: 0, pseudo: pseudo.clone(), content: content.clone() };
-            let json = serde_json::to_string(&msg).unwrap();
-            println!("[toi] {}", content);
-            let _ = tx_stdin.send(json);
-        }
+    let server = axum::serve(listener, app).with_graceful_shutdown(async {
+        let _ = shutdown.await;
+        println!("Arrêt du serveur demandé...");
     });
 
-    axum::serve(listener, app).await.unwrap();
+    if let Err(err) = server.await {
+        eprintln!("Erreur serveur: {err}");
+    }
+    if let Ok(mut global) = GLOBAL_TX.lock() {
+        *global = None;
+    }
+    println!("Serveur arrêté.");
 }
 
 fn print_local_ip() {
@@ -116,7 +139,6 @@ async fn ws_handler(
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
-    let client_id = timestamp_id();
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.tx.subscribe();
 
@@ -129,17 +151,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     while let Some(Ok(Message::Text(text))) = receiver.next().await {
-        if let Ok(mut msg) = serde_json::from_str::<ChatMessage>(&text) {
-            msg.client_id = client_id;
-            println!("[{}] {}", msg.pseudo, msg.content);
-            let _ = state.tx.send(serde_json::to_string(&msg).unwrap());
+        if let Ok(NetworkEvent::DrawLine(draw)) = serde_json::from_str::<NetworkEvent>(&text) {
+            if let Ok(sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
+                if let Some(tx) = sink.as_ref() {
+                    let _ = tx.send(draw.to_line());
+                }
+            }
         }
+        let _ = state.tx.send(text);
     }
 
     send_task.abort();
-}
-
-fn timestamp_id() -> u32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos()
 }
