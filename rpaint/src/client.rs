@@ -1,22 +1,25 @@
-use crate::events::{DrawLineEvent, NetworkEvent};
-use crate::model::Line;
+use crate::events::NetworkEvent;
+use crate::model::timestamp_id;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+// Boucle client websocket: envoie les traits dessinés localement et reçoit ceux du host.
 pub async fn run(
     host_ip: &str,
     _pseudo: &str,
     mut shutdown: oneshot::Receiver<()>,
-    draw_tx: mpsc::UnboundedSender<Line>,
-    mut outgoing_draw_rx: mpsc::UnboundedReceiver<DrawLineEvent>,
+    draw_tx: mpsc::UnboundedSender<NetworkEvent>,
+    mut outgoing_draw_rx: mpsc::UnboundedReceiver<NetworkEvent>,
 ) {
     let client_id = timestamp_id();
-    // Accepte "127.0.0.1" ou "abc123.localhost.run"
+    // On adapte l'URL selon un usage local ou via un tunnel public.
     let url = if host_ip.contains("localhost.run") {
-        format!("wss://{}:443/ws", host_ip)  // TLS pour WAN
+        // Quand le host est exposé sur Internet, on passe en WSS sur le port 443.
+        format!("wss://{}:443/ws", host_ip)
     } else {
-        format!("ws://{}:3000/ws", host_ip)  // local sans TLS
+        // En local, le serveur tourne en WS simple sur 3000.
+        format!("ws://{}:3000/ws", host_ip)
     };
     let (ws_stream, _) = match connect_async(&url).await {
         Ok(conn) => conn,
@@ -29,7 +32,7 @@ pub async fn run(
 
     let (mut write, mut read) = ws_stream.split();
 
-    // Client GUI: on écoute le host jusqu'au signal leave/close.
+    // Le client reste dans cette boucle jusqu'au leave ou à la fermeture du lien.
     loop {
         tokio::select! {
             _ = &mut shutdown => {
@@ -37,9 +40,13 @@ pub async fn run(
                 break;
             }
             outgoing = outgoing_draw_rx.recv() => {
-                if let Some(mut draw) = outgoing {
-                    draw.source_id = client_id;
-                    if let Ok(payload) = serde_json::to_string(&NetworkEvent::DrawLine(draw)) {
+                // Un événement réseau (DrawLine / DeleteLine) local est envoyé au host.
+                if let Some(mut ev) = outgoing {
+                    match &mut ev {
+                        NetworkEvent::DrawLine(d) => { d.source_id = client_id; }
+                        NetworkEvent::DeleteLine(_) => {}
+                    }
+                    if let Ok(payload) = serde_json::to_string(&ev) {
                         if write.send(Message::Text(payload)).await.is_err() {
                             eprintln!("Erreur websocket client: envoi impossible.");
                             break;
@@ -50,13 +57,12 @@ pub async fn run(
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(raw))) => {
+                        // On ne traite que les événements de dessin sérialisés en JSON.
                         if let Ok(event) = serde_json::from_str::<NetworkEvent>(&raw) {
-                            match event {
-                                NetworkEvent::DrawLine(draw) => {
-                                    if draw.source_id != client_id {
-                                        let _ = draw_tx.send(draw.to_line());
-                                    }
-                                }
+                            // Ignorer l'écho de nos propres DrawLine pour éviter les doublons locaux.
+                            let is_own_draw = matches!(&event, NetworkEvent::DrawLine(d) if d.source_id == client_id);
+                            if !is_own_draw {
+                                let _ = draw_tx.send(event);
                             }
                         }
                     }
@@ -77,7 +83,4 @@ pub async fn run(
     println!("Client arrêté.");
 }
 
-fn timestamp_id() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
-}
+// timestamp_id imported from model

@@ -1,5 +1,4 @@
-use crate::events::{DrawLineEvent, NetworkEvent};
-use crate::model::Line;
+use crate::events::NetworkEvent;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -14,21 +13,25 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
 use tokio::sync::mpsc;
 
+// État partagé du serveur websocket: un canal broadcast pour redistribuer les dessins.
 struct AppState {
     tx: broadcast::Sender<String>,
 }
 
+// Références globales pour brancher l'UI locale au serveur sans passer par une architecture plus lourde.
 static GLOBAL_TX: Mutex<Option<broadcast::Sender<String>>> = Mutex::new(None);
-static GLOBAL_LOCAL_DRAW_TX: Mutex<Option<mpsc::UnboundedSender<Line>>> = Mutex::new(None);
+static GLOBAL_LOCAL_DRAW_TX: Mutex<Option<mpsc::UnboundedSender<NetworkEvent>>> = Mutex::new(None);
 
-pub fn set_local_draw_sink(tx: Option<mpsc::UnboundedSender<Line>>) {
+// Permet d'activer ou de désactiver l'envoi direct vers le canvas local.
+pub fn set_local_draw_sink(tx: Option<mpsc::UnboundedSender<NetworkEvent>>) {
     if let Ok(mut sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
         *sink = tx;
     }
 }
 
-pub fn publish_draw_line(event: DrawLineEvent) -> bool {
-    let payload = match serde_json::to_string(&NetworkEvent::DrawLine(event)) {
+// Publie n'importe quel NetworkEvent (DrawLine, DeleteLine...) vers tous les clients.
+pub fn publish_network_event(event: NetworkEvent) -> bool {
+    let payload = match serde_json::to_string(&event) {
         Ok(s) => s,
         Err(_) => return false,
     };
@@ -42,15 +45,17 @@ pub fn publish_draw_line(event: DrawLineEvent) -> bool {
     false
 }
 
+// Lance le serveur websocket local sur le port 3000.
 pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
     let (tx, _) = broadcast::channel::<String>(256);
     if let Ok(mut global) = GLOBAL_TX.lock() {
         *global = Some(tx.clone());
     }
     let state = Arc::new(AppState { tx: tx.clone() });
-    
+
     print_local_ip();
 
+    // Route unique: /ws pour les clients de dessin.
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
@@ -74,8 +79,8 @@ pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
 
 fn print_local_ip() {
     use std::net::UdpSocket;
-    // Astuce : ouvrir un socket UDP sans envoyer de données
-    // permet de connaître l'IP locale utilisée pour joindre internet
+    // Ouvrir un socket UDP sans envoyer de paquet force le système à révéler
+    // l'interface réseau choisie pour sortir vers internet.
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
@@ -90,47 +95,7 @@ fn print_local_ip() {
 }
 
 
-/* 
-#[warn(unused)]
-async fn start_tunnel() {
-    let mut child = tokio::process::Command::new("ssh")
-        .args([
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ServerAliveInterval=30",
-            "-R", "80:localhost:3000",
-            "localhost.run",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("Impossible de lancer ssh (est-il installé ?)");
-
-    // Lire stderr où localhost.run affiche l'URL
-    if let Some(stderr) = child.stderr.take() {
-        let mut lines = tokio::io::BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.contains("localhost.run") && line.contains("http") {
-                // Extraire l'URL et la convertir en ws://
-                if let Some(url) = extract_url(&line) {
-                    let ws_url = url.replace("https://", "").replace("http://", "");
-                    println!("┌─────────────────────────────────────────┐");
-                    println!("│  Lien à partager :                      │");
-                    println!("│  cargo run -- --join {}  │", ws_url);
-                    println!("└─────────────────────────────────────────┘\n");
-                }
-            }
-        }
-    }
-
-    child.wait().await.ok();
-}
-#[warn(unused)]
-fn extract_url(line: &str) -> Option<String> {
-    line.split_whitespace()
-        .find(|s| s.starts_with("https://") || s.starts_with("http://"))
-        .map(|s| s.trim_end_matches('.').to_string())
-}
-*/
+// Accepte une nouvelle connexion websocket et bascule le socket dans la boucle de traitement.
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -138,10 +103,12 @@ async fn ws_handler(
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
+// Réplique les messages reçus à tous les clients et alimente aussi le canvas local si nécessaire.
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.tx.subscribe();
 
+    // Un task séparé pousse les messages broadcast vers ce socket particulier.
     let send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             if sender.send(Message::Text(msg)).await.is_err() {
@@ -151,10 +118,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     while let Some(Ok(Message::Text(text))) = receiver.next().await {
-        if let Ok(NetworkEvent::DrawLine(draw)) = serde_json::from_str::<NetworkEvent>(&text) {
+        // Si le client a envoyé un événement réseau (DrawLine / DeleteLine),
+        // on le transmet d'abord au canvas local via le sink (pour que l'UI
+        // applique la modification sans l'enregistrer dans undo), puis on
+        // rebroadcast l'événement à tous les clients.
+        if let Ok(ev) = serde_json::from_str::<NetworkEvent>(&text) {
             if let Ok(sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
                 if let Some(tx) = sink.as_ref() {
-                    let _ = tx.send(draw.to_line());
+                    let _ = tx.send(ev.clone());
                 }
             }
         }
