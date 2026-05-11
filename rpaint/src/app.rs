@@ -46,11 +46,11 @@ impl eframe::App for PaintApp {
 
         // --- 1. GESTION DES RACCOURCIS CLAVIERS ---
         ctx.input(|i| {
-            if i.modifiers.command && i.key_pressed(egui::Key::Z) { self.undo(); }
-            if i.modifiers.command && i.key_pressed(egui::Key::Y) { self.redo(); }
-            if i.modifiers.command && i.key_pressed(egui::Key::C) { self.copy_selected(); }
-            if i.modifiers.command && i.key_pressed(egui::Key::V) { self.paste(); }
-            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) { self.delete_selected(); }
+            if i.modifiers.command && (i.key_pressed(egui::Key::Y) || (i.modifiers.shift && i.key_pressed(egui::Key::Z))) { self.redo(); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::Z) { self.undo(); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::C) { self.copy_selected(); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::V) { self.paste(); }
+            else if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) { self.delete_selected(); }
         });
 
         // --- 2. BARRE D'OUTILS (GAUCHE) ---
