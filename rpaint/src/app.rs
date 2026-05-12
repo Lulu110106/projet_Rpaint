@@ -1,11 +1,10 @@
 use eframe::egui::{self, Color32, Rect, Shape, Stroke, Vec2};
-use crate::model::{PaintApp, BrushMode, PaintAction};
+use crate::model::{PaintApp, BrushMode, PaintAction, ShapeKind};
 use crate::model::Shape as PaintShape;
-use crate::logic::{dist_to_segment};
-use crate::ui_tools::{draw_dashed_rect};
+use crate::ui_tools::{draw_dashed_rect, draw_ellipse, draw_regular_polygon, draw_star, draw_arrow};
 use crate::server;
 use crate::client;
-use crate::events::{DrawLineEvent, NetworkEvent};
+use crate::events::{DrawShapeEvent, NetworkEvent};
 use crate::model::timestamp_id;
 use std::time::Duration;
 
@@ -16,23 +15,23 @@ impl eframe::App for PaintApp {
         let mut received_any = false;
         while let Ok(ev) = self.incoming_draw_rx.try_recv() {
             match ev {
-                NetworkEvent::DrawLine(draw) => {
-                    let line = draw.to_line();
+                NetworkEvent::DrawShape(draw) => {
+                    let shape = draw.to_shape();
                     // Upsert par id pour avoir une prévisualisation temps réel
                     // (les updates d'un même trait remplacent la version précédente).
-                    if let Some(existing) = self.lines.iter_mut().find(|l| l.id() == line.id()) {
-                        *existing = line;
+                    if let Some(existing) = self.lines.iter_mut().find(|l| l.id() == shape.id()) {
+                        *existing = shape;
                     } else {
                         // Appliqué sans passer par execute pour ne pas remplir l'undo local.
-                        self.apply_action(&PaintAction::Create(vec![line]));
+                        self.apply_action(&PaintAction::Create(vec![shape]));
                     }
                     received_any = true;
                 }
-                NetworkEvent::DeleteLine(id) => {
-                    // Trouver la ligne par id et la supprimer (sans enregistrer dans undo).
+                NetworkEvent::DeleteShape(id) => {
+                    // Trouver la forme par id et la supprimer (sans enregistrer dans undo).
                     if let Some((idx, _)) = self.lines.iter().enumerate().find(|(_, l)| l.id() == id) {
-                        let line = self.lines[idx].clone();
-                        self.apply_action(&PaintAction::Delete(vec![idx], vec![line]));
+                        let shape = self.lines[idx].clone();
+                        self.apply_action(&PaintAction::Delete(vec![idx], vec![shape]));
                         received_any = true;
                     }
                 }
@@ -167,7 +166,25 @@ impl eframe::App for PaintApp {
             ui.separator();
             ui.label("Outils");
             ui.selectable_value(&mut self.mode, BrushMode::Freehand, "✏ Dessin");
-            ui.selectable_value(&mut self.mode, BrushMode::StraightLine, "📏 Ligne");
+            ui.selectable_value(&mut self.mode, BrushMode::Shape, format!("🔺 Forme: {}", self.selected_shape.label()));
+            ui.menu_button("Changer forme", |ui| {
+                let kinds = [
+                    ShapeKind::Line,
+                    ShapeKind::Rectangle,
+                    ShapeKind::Oval,
+                    ShapeKind::Triangle,
+                    ShapeKind::Pentagon,
+                    ShapeKind::Hexagon,
+                    ShapeKind::Octagon,
+                    ShapeKind::Star,
+                    ShapeKind::Arrow,
+                ];
+                for kind in kinds {
+                    if ui.selectable_value(&mut self.selected_shape, kind, kind.label()).clicked() {
+                        self.mode = BrushMode::Shape;
+                    }
+                }
+            });
             ui.selectable_value(&mut self.mode, BrushMode::Eraser, "🧽 Gomme");
             ui.selectable_value(&mut self.mode, BrushMode::Select, "🖱 Sélection");
 
@@ -276,14 +293,14 @@ impl eframe::App for PaintApp {
 
             if let Some(pos) = pointer {
                 match self.mode {
-                    BrushMode::Freehand | BrushMode::StraightLine => {
+                    BrushMode::Freehand | BrushMode::Shape => {
                         if response.dragged() {
                             if self.current_line.is_empty() {
                                 self.active_stroke_id = Some(timestamp_id());
                                 self.current_line.push(pos);
                             }
 
-                            if self.mode == BrushMode::StraightLine {
+                            if self.mode == BrushMode::Shape {
                                 if self.current_line.len() == 1 {
                                     self.current_line.push(pos);
                                 } else {
@@ -299,15 +316,67 @@ impl eframe::App for PaintApp {
                                 }
                             }
 
-                            // Envoi incrémental: même id pendant tout le drag => remote temps réel.
                             if let Some(stroke_id) = self.active_stroke_id {
-                                let preview = PaintShape::Line {
-                                    id: stroke_id,
-                                    points: self.current_line.clone(),
-                                    color: self.brush_color,
-                                    width: self.brush_size,
+                                let preview = if self.mode == BrushMode::Freehand {
+                                    PaintShape::Line {
+                                        id: stroke_id,
+                                        points: self.current_line.clone(),
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    }
+                                } else {
+                                    let start = self.current_line[0];
+                                    let end = self.current_line[1];
+                                    match self.selected_shape {
+                                        ShapeKind::Line => PaintShape::Line {
+                                            id: stroke_id,
+                                            points: self.current_line.clone(),
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Rectangle => PaintShape::Rectangle {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Oval => PaintShape::Oval {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Triangle
+                                        | ShapeKind::Pentagon
+                                        | ShapeKind::Hexagon
+                                        | ShapeKind::Octagon => PaintShape::RegularPolygon {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            sides: self.selected_shape.sides(),
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Star => PaintShape::Star {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            points: 5,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Arrow => PaintShape::Arrow {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                    }
                                 };
-                                let ev = NetworkEvent::DrawLine(DrawLineEvent::from_line(&preview));
+                                let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(&preview));
                                 if self.server_running {
                                     let _ = server::publish_network_event(ev);
                                 } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
@@ -316,33 +385,92 @@ impl eframe::App for PaintApp {
                             }
                         } else if response.drag_released() && !self.current_line.is_empty() {
                             let points = std::mem::take(&mut self.current_line);
-                            let line_id = self.active_stroke_id.take().unwrap_or_else(timestamp_id);
-                            let line = PaintShape::Line { id: line_id, points, color: self.brush_color, width: self.brush_size };
-                            // Enregistrer localement (undo + propagation via execute)
-                            self.execute(PaintAction::Create(vec![line.clone()]));
+                            let shape_id = self.active_stroke_id.take().unwrap_or_else(timestamp_id);
+                            let shape = if self.mode == BrushMode::Freehand {
+                                PaintShape::Line {
+                                    id: shape_id,
+                                    points,
+                                    color: self.brush_color,
+                                    width: self.brush_size,
+                                }
+                            } else {
+                                let start = points[0];
+                                let end = points.get(1).cloned().unwrap_or(start);
+                                match self.selected_shape {
+                                    ShapeKind::Line => PaintShape::Line {
+                                        id: shape_id,
+                                        points,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Rectangle => PaintShape::Rectangle {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Oval => PaintShape::Oval {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Triangle
+                                    | ShapeKind::Pentagon
+                                    | ShapeKind::Hexagon
+                                    | ShapeKind::Octagon => PaintShape::RegularPolygon {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        sides: self.selected_shape.sides(),
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Star => PaintShape::Star {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        points: 5,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Arrow => PaintShape::Arrow {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                }
+                            };
+                            self.execute(PaintAction::Create(vec![shape]));
                         }
                     },
                     BrushMode::Eraser => {
                         if response.dragged() || response.clicked() {
                             let mut to_del = None;
-                            for (i, line) in self.lines.iter().enumerate() {
-                                if line.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < self.brush_size) {
-                                    to_del = Some(i); break;
+                            for (i, shape) in self.lines.iter().enumerate() {
+                                if shape.distance_to(pos) < self.brush_size {
+                                    to_del = Some(i);
+                                    break;
                                 }
                             }
                             if let Some(idx) = to_del {
-                                let line = self.lines[idx].clone();
+                                let shape = self.lines[idx].clone();
                                 // execute gère aussi la propagation réseau du Delete.
-                                self.execute(PaintAction::Delete(vec![idx], vec![line]));
+                                self.execute(PaintAction::Delete(vec![idx], vec![shape]));
                             }
                         }
                     },
                     BrushMode::Select => {
                         if response.drag_started() {
-                            let mut hit = self.selected_indices.iter().find(|&&i| self.get_line_rect(i).contains(pos)).cloned();
+                            let mut hit = self.selected_indices.iter().find(|&&i| self.get_shape_rect(i).contains(pos)).cloned();
                             if hit.is_none() {
-                                hit = self.lines.iter().enumerate().find(|(_, l)| 
-                                    l.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < 10.0)).map(|(i, _)| i);
+                                hit = self.lines.iter().enumerate().find(|(_, l)|
+                                    l.distance_to(pos) < 10.0
+                                ).map(|(i, _)| i);
                             }
                             if let Some(idx) = hit {
                                 if !self.selected_indices.contains(&idx) { self.selected_indices = vec![idx]; }
@@ -358,10 +486,10 @@ impl eframe::App for PaintApp {
                                 let delta = response.drag_delta();
                                 self.drag_accumulated_delta += delta;
                                 for &idx in &self.selected_indices {
-                                    if let Some(l) = self.lines.get_mut(idx) {
-                                        for p in l.points_mut() { *p += delta; }
+                                    if let Some(shape) = self.lines.get_mut(idx) {
+                                        shape.translate(delta);
                                         // Envoyer la position mise à jour en temps réel.
-                                        let ev = NetworkEvent::DrawLine(DrawLineEvent::from_line(l));
+                                        let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape));
                                         if self.server_running {
                                             let _ = server::publish_network_event(ev);
                                         } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
@@ -379,14 +507,16 @@ impl eframe::App for PaintApp {
                                 if total.length_sq() > 0.0 {
                                     // Annulation temporaire pour enregistrer le mouvement propre dans l'undo
                                     for &idx in &self.selected_indices {
-                                        if let Some(l) = self.lines.get_mut(idx) { for p in l.points_mut() { *p -= total; } }
+                                        if let Some(shape) = self.lines.get_mut(idx) {
+                                            shape.translate(-total);
+                                        }
                                     }
                                     self.execute(PaintAction::Move(self.selected_indices.clone(), total));
                                 }
                                 self.is_dragging_items = false;
                             } else if let Some(rect) = self.selection_rect.take() {
                                 self.selected_indices = self.lines.iter().enumerate()
-                                    .filter(|(_, l)| l.points().iter().any(|p| rect.contains(*p)))
+                                    .filter(|(_, l)| l.bounding_rect().intersects(rect))
                                     .map(|(i, _)| i).collect();
                                 self.selection_start_pos = None;
                             }
@@ -397,11 +527,31 @@ impl eframe::App for PaintApp {
 
             // --- 4. RENDU FINAL ---
 
-            // Dessiner les lignes stockées
-            for (i, line) in self.lines.iter().enumerate() {
-                painter.add(egui::Shape::line(line.points().clone(), Stroke::new(line.width(), line.color())));
+            // Dessiner les formes stockées
+            for (i, shape) in self.lines.iter().enumerate() {
+                match shape {
+                    PaintShape::Line { points, width, color, .. } => {
+                        painter.add(egui::Shape::line(points.clone(), Stroke::new(*width, *color)));
+                    }
+                    PaintShape::Rectangle { start, end, width, color, .. } => {
+                        painter.rect_stroke(Rect::from_two_pos(*start, *end), 0.0, Stroke::new(*width, *color));
+                    }
+                    PaintShape::Oval { start, end, width, color, .. } => {
+                        let rect = Rect::from_two_pos(*start, *end);
+                        draw_ellipse(&painter, rect, Stroke::new(*width, *color));
+                    }
+                    PaintShape::RegularPolygon { start, end, sides, width, color, .. } => {
+                        draw_regular_polygon(&painter, Rect::from_two_pos(*start, *end), *sides as usize, Stroke::new(*width, *color));
+                    }
+                    PaintShape::Star { start, end, points, width, color, .. } => {
+                        draw_star(&painter, Rect::from_two_pos(*start, *end), *points as usize, Stroke::new(*width, *color));
+                    }
+                    PaintShape::Arrow { start, end, width, color, .. } => {
+                        draw_arrow(&painter, *start, *end, Stroke::new(*width, *color));
+                    }
+                }
                 if self.mode == BrushMode::Select && self.selected_indices.contains(&i) {
-                    let r = self.get_line_rect(i);
+                    let r = self.get_shape_rect(i);
                     draw_dashed_rect(&painter, r, Color32::WHITE);
                     draw_dashed_rect(&painter, r.expand(1.0), Color32::BLACK);
                 }
@@ -413,9 +563,37 @@ impl eframe::App for PaintApp {
                 painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)));
             }
 
-            // Dessiner la ligne en cours de tracé
+            // Dessiner la forme en cours de tracé
             if !self.current_line.is_empty() {
-                painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                if self.mode == BrushMode::Shape {
+                    let start = self.current_line[0];
+                    let end = self.current_line[1];
+                    match self.selected_shape {
+                        ShapeKind::Line => {
+                            painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                        }
+                        ShapeKind::Rectangle => {
+                            painter.rect_stroke(Rect::from_two_pos(start, end), 0.0, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Oval => {
+                            draw_ellipse(&painter, Rect::from_two_pos(start, end), Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Triangle
+                        | ShapeKind::Pentagon
+                        | ShapeKind::Hexagon
+                        | ShapeKind::Octagon => {
+                            draw_regular_polygon(&painter, Rect::from_two_pos(start, end), self.selected_shape.sides() as usize, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Star => {
+                            draw_star(&painter, Rect::from_two_pos(start, end), 5, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Arrow => {
+                            draw_arrow(&painter, start, end, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                    }
+                } else {
+                    painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                }
             }
 
             // Dessiner le curseur de la gomme

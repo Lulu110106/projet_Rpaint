@@ -40,11 +40,11 @@ pub async fn run(
                 break;
             }
             outgoing = outgoing_draw_rx.recv() => {
-                // Un événement réseau (DrawLine / DeleteLine) local est envoyé au host.
+                // Un événement réseau (DrawShape / DeleteShape) local est envoyé au host.
                 if let Some(mut ev) = outgoing {
                     match &mut ev {
-                        NetworkEvent::DrawLine(d) => { d.source_id = client_id; }
-                        NetworkEvent::DeleteLine(_) => {}
+                        NetworkEvent::DrawShape(d) => { d.source_id = client_id; }
+                        NetworkEvent::DeleteShape(_) => {}
                     }
                     if let Ok(payload) = serde_json::to_string(&ev) {
                         if write.send(Message::Text(payload)).await.is_err() {
@@ -59,8 +59,8 @@ pub async fn run(
                     Some(Ok(Message::Text(raw))) => {
                         // On ne traite que les événements de dessin sérialisés en JSON.
                         if let Ok(event) = serde_json::from_str::<NetworkEvent>(&raw) {
-                            // Ignorer l'écho de nos propres DrawLine pour éviter les doublons locaux.
-                            let is_own_draw = matches!(&event, NetworkEvent::DrawLine(d) if d.source_id == client_id);
+                            // Ignorer l'écho de nos propres DrawShape pour éviter les doublons locaux.
+                            let is_own_draw = matches!(&event, NetworkEvent::DrawShape(d) if d.source_id == client_id);
                             if !is_own_draw {
                                 let _ = draw_tx.send(event);
                             }
