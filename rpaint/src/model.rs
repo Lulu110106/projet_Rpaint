@@ -2,6 +2,7 @@ use eframe::egui::{ Color32, Pos2, Rect, Vec2};
 use crate::events::NetworkEvent;
 use tokio::task::JoinHandle;
 use tokio::sync::{mpsc, oneshot};
+use crate::layers::{Layer, LayerManager};
 
 // Mode d'outil actif dans l'interface.
 #[derive(Clone, PartialEq)]
@@ -246,11 +247,25 @@ pub enum PaintAction {
     Delete(Vec<usize>, Vec<Shape>),
     Modify(Vec<usize>, Vec<Shape>, Vec<Shape>),
     Move(Vec<usize>, Vec2),
+    // Actions pour les layers
+    CreateLayer { id: u64, name: String, old_active: u64 },
+    DeleteLayer { id: u64, layer: Layer, position: usize },
+    RenameLayer { id: u64, old_name: String, new_name: String },
+    SetLayerVisibility { id: u64, visible: bool },
+    ReorderLayers { from_idx: usize, to_idx: usize },
+    SetActiveLayer { old_id: u64, new_id: u64 },
+    // Actions réseau (ne se propagent pas)
+    NetworkCreateLayer { id: u64, name: String, position: usize },
+    NetworkDeleteLayer { id: u64 },
+    NetworkRenameLayer { id: u64, name: String },
+    NetworkSetLayerVisibility { id: u64, visible: bool },
+    NetworkSetActiveLayer { id: u64 },
+    NetworkReorderLayers { from_idx: usize, to_idx: usize },
 }
 
 // État global de l'application: dessin, sélection, presse-papiers, et réseau.
 pub struct PaintApp {
-    pub lines: Vec<Shape>,
+    pub layer_manager: LayerManager,
     pub undo_stack: Vec<PaintAction>,
     pub redo_stack: Vec<PaintAction>,
     pub mode: BrushMode,
@@ -278,6 +293,11 @@ pub struct PaintApp {
     pub incoming_draw_tx: mpsc::UnboundedSender<NetworkEvent>,
     pub incoming_draw_rx: mpsc::UnboundedReceiver<NetworkEvent>,
     pub outgoing_draw_tx: Option<mpsc::UnboundedSender<NetworkEvent>>,
+    // State pour le panneau des layers
+    pub layers_panel_rename_id: Option<u64>,
+    pub layers_panel_rename_text: String,
+    pub layers_drag_source: Option<usize>,
+    pub last_layer_index: usize,
 }
 
 impl Default for PaintApp {
@@ -286,7 +306,7 @@ impl Default for PaintApp {
         // vers la boucle d'affichage d'egui.
         let (incoming_draw_tx, incoming_draw_rx) = mpsc::unbounded_channel();
         Self {
-            lines: Vec::new(),
+            layer_manager: LayerManager::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             mode: BrushMode::Freehand,
@@ -314,6 +334,10 @@ impl Default for PaintApp {
             incoming_draw_tx,
             incoming_draw_rx,
             outgoing_draw_tx: None,
+            layers_panel_rename_id: None,
+            layers_panel_rename_text: String::new(),
+            layers_drag_source: None,
+            last_layer_index: 0,
         }
     }
 }

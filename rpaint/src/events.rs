@@ -6,7 +6,14 @@ use crate::model::Shape;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum NetworkEvent {
     DrawShape(DrawShapeEvent),
-    DeleteShape(u64), // supprime la forme identifiée par son id
+    DeleteShape(u64), // supprime la ligne identifiée par son id
+    // Événements pour les layers
+    CreateLayer { id: u64, name: String, position: usize },
+    DeleteLayer { id: u64 },
+    RenameLayer { id: u64, name: String },
+    SetLayerVisibility { id: u64, visible: bool },
+    SetActiveLayer { id: u64 },
+    ReorderLayers { from_idx: usize, to_idx: usize },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
