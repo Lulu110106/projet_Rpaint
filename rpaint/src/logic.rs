@@ -1,7 +1,7 @@
 use crate::model::*;
-use crate::events::{DrawLineEvent, NetworkEvent};
+use crate::events::{DrawShapeEvent, NetworkEvent};
 use crate::server;
-use eframe::egui::{Pos2, Rect, Vec2};
+use eframe::egui::{Rect, Vec2};
 
 impl PaintApp {
     fn send_network_event(&self, event: NetworkEvent) {
@@ -57,10 +57,19 @@ impl PaintApp {
                     for p in points { *p += offset; }
                     *id = timestamp_id();
                 }
+                Shape::Rectangle { start, end, id, .. }
+                | Shape::Oval { start, end, id, .. }
+                | Shape::RegularPolygon { start, end, id, .. }
+                | Shape::Star { start, end, id, .. }
+                | Shape::Arrow { start, end, id, .. } => {
+                    *start += offset;
+                    *end += offset;
+                    *id = timestamp_id();
+                }
             }
         }
         self.execute(PaintAction::Create(new_lines.clone()));
-        self.clipboard = new_lines; 
+        self.clipboard = new_lines;
         let start_idx = self.lines.len() - self.clipboard.len();
         self.selected_indices = (start_idx..self.lines.len()).collect();
     }
@@ -74,24 +83,24 @@ impl PaintApp {
         // Toute action locale de création/suppression est propagée.
         match &action {
             PaintAction::Create(lines) => {
-                for line in lines {
-                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                for shape in lines {
+                    self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                 }
             }
-            PaintAction::Delete(_, lines) => {
-                for line in lines {
-                    self.send_network_event(NetworkEvent::DeleteLine(line.id()));
+            PaintAction::Delete(_, shapes) => {
+                for shape in shapes {
+                    self.send_network_event(NetworkEvent::DeleteShape(shape.id()));
                 }
             }
-            PaintAction::Modify(_, _, new_lines) => {
-                for line in new_lines {
-                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+            PaintAction::Modify(_, _, new_shapes) => {
+                for shape in new_shapes {
+                    self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                 }
             }
             PaintAction::Move(indices, _) => {
                 for &idx in indices {
-                    if let Some(line) = self.lines.get(idx) {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    if let Some(shape) = self.lines.get(idx) {
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
                 }
             }
@@ -122,11 +131,7 @@ impl PaintApp {
             PaintAction::Move(indices, delta) => {
                 for &idx in indices {
                     if let Some(shape) = self.lines.get_mut(idx) {
-                        match shape {
-                            Shape::Line { points, .. } => {
-                                for p in points { *p += *delta; }
-                            }
-                        }
+                        shape.translate(*delta);
                     }
                 }
             }
@@ -137,53 +142,49 @@ impl PaintApp {
     pub fn undo(&mut self) {
         if let Some(action) = self.undo_stack.pop() {
             match &action {
-                PaintAction::Create(lines) => {
+                PaintAction::Create(shapes) => {
                     // Supprimer par id (et non par pop en fin de tableau),
-                    // car des lignes distantes peuvent avoir été ajoutées après.
-                    let mut ids: Vec<u64> = lines.iter().map(|l| l.id()).collect();
+                    // car des formes distantes peuvent avoir été ajoutées après.
+                    let mut ids: Vec<u64> = shapes.iter().map(|l| l.id()).collect();
                     ids.sort_unstable();
                     ids.dedup();
                     self.lines.retain(|existing| ids.binary_search(&existing.id()).is_err());
-                    // Informer les autres clients que ces lignes ont été annulées.
-                    for l in lines {
-                        self.send_network_event(NetworkEvent::DeleteLine(l.id()));
+                    // Informer les autres clients que ces formes ont été annulées.
+                    for shape in shapes {
+                        self.send_network_event(NetworkEvent::DeleteShape(shape.id()));
                     }
                 },
-                PaintAction::Delete(indices, lines) => {
-                    let mut combined: Vec<_> = indices.iter().zip(lines.iter()).collect();
+                PaintAction::Delete(indices, shapes) => {
+                    let mut combined: Vec<_> = indices.iter().zip(shapes.iter()).collect();
                     combined.sort_by_key(|&(&idx, _)| idx);
-                    for (&idx, line) in combined { self.lines.insert(idx, line.clone()); }
+                    for (&idx, shape) in combined { self.lines.insert(idx, shape.clone()); }
 
-                    // Undo d'une suppression = recréer ces lignes sur les autres clients.
-                    for line in lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    // Undo d'une suppression = recréer ces formes sur les autres clients.
+                    for shape in shapes {
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
                 },
-                PaintAction::Modify(indices, old_lines, _) => {
+                PaintAction::Modify(indices, old_shapes, _) => {
                     for (i, &idx) in indices.iter().enumerate() {
-                        if let Some(l) = self.lines.get_mut(idx) { *l = old_lines[i].clone(); }
+                        if let Some(l) = self.lines.get_mut(idx) { *l = old_shapes[i].clone(); }
                     }
 
                     // Undo d'une modification = repousser l'ancienne version.
-                    for line in old_lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    for shape in old_shapes {
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
                 },
                 PaintAction::Move(indices, delta) => {
                     for &idx in indices {
                         if let Some(shape) = self.lines.get_mut(idx) {
-                            match shape {
-                                Shape::Line { points, .. } => {
-                                    for p in points { *p -= *delta; }
-                                }
-                            }
+                            shape.translate(-*delta);
                         }
                     }
 
                     // Undo d'un déplacement = repousser la géométrie courante restaurée.
                     for &idx in indices {
                         if let Some(line) = self.lines.get(idx) {
-                            self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                            self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(line)));
                         }
                     }
                 }
@@ -200,25 +201,25 @@ impl PaintApp {
 
             // Repropager l'action rejouée pour garder les autres clients synchronisés.
             match &action {
-                PaintAction::Create(lines) => {
-                    for l in lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(l)));
+                PaintAction::Create(shapes) => {
+                    for shape in shapes {
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
                 }
-                PaintAction::Delete(_, lines) => {
-                    for l in lines {
-                        self.send_network_event(NetworkEvent::DeleteLine(l.id()));
+                PaintAction::Delete(_, shapes) => {
+                    for shape in shapes {
+                        self.send_network_event(NetworkEvent::DeleteShape(shape.id()));
                     }
                 }
-                PaintAction::Modify(_, _, new_lines) => {
-                    for line in new_lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                PaintAction::Modify(_, _, new_shapes) => {
+                    for shape in new_shapes {
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
                 }
                 PaintAction::Move(indices, _) => {
                     for &idx in indices {
-                        if let Some(line) = self.lines.get(idx) {
-                            self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                        if let Some(shape) = self.lines.get(idx) {
+                            self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                         }
                     }
                 }
@@ -230,26 +231,11 @@ impl PaintApp {
 
     // --- UTILITAIRES DE SÉLECTION ---
 
-    // Calcule une boîte englobante pour tester rapidement si un tracé est cliqué/sélectionné.
-    pub fn get_line_rect(&self, idx: usize) -> Rect {
+    // Calcule une boîte englobante pour tester rapidement si une forme est cliquée/sélectionnée.
+    pub fn get_shape_rect(&self, idx: usize) -> Rect {
         if let Some(shape) = self.lines.get(idx) {
-            match shape {
-                Shape::Line { points, width, .. } => {
-                    let mut r = Rect::NOTHING;
-                    for p in points { r.extend_with(*p); }
-                    return r.expand(width / 2.0 + 5.0);
-                }
-            }
+            return shape.bounding_rect();
         }
         Rect::NOTHING
     }
-}
-
-// Distance entre un point et un segment.
-// Utilisé par la gomme et la sélection pour savoir si le pointeur "touche" un trait.
-pub fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
-    let l2 = a.distance_sq(b);
-    if l2 == 0.0 { return p.distance(a); }
-    let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
-    p.distance(Pos2::new(a.x + t.clamp(0.0, 1.0) * (b.x - a.x), a.y + t.clamp(0.0, 1.0) * (b.y - a.y)))
 }
