@@ -29,7 +29,7 @@ pub fn set_local_draw_sink(tx: Option<mpsc::UnboundedSender<NetworkEvent>>) {
     }
 }
 
-// Publie n'importe quel NetworkEvent (DrawLine, DeleteLine...) vers tous les clients.
+// Publie n'importe quel NetworkEvent (DrawShape, DeleteShape...) vers tous les clients.
 pub fn publish_network_event(event: NetworkEvent) -> bool {
     let payload = match serde_json::to_string(&event) {
         Ok(s) => s,
@@ -118,7 +118,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     while let Some(Ok(Message::Text(text))) = receiver.next().await {
-        // Si le client a envoyé un événement réseau (DrawLine / DeleteLine),
+        // Si le client a envoyé un événement réseau (DrawShape / DeleteShape),
         // on le transmet d'abord au canvas local via le sink (pour que l'UI
         // applique la modification sans l'enregistrer dans undo), puis on
         // rebroadcast l'événement à tous les clients.

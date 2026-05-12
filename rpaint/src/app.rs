@@ -1,11 +1,10 @@
 use eframe::egui::{self, Color32, Rect, Shape, Stroke, Vec2};
-use crate::model::{PaintApp, BrushMode, PaintAction};
+use crate::model::{PaintApp, BrushMode, PaintAction, ShapeKind};
 use crate::model::Shape as PaintShape;
-use crate::logic::{dist_to_segment};
-use crate::ui_tools::{draw_dashed_rect};
+use crate::ui_tools::{draw_dashed_rect, draw_ellipse, draw_regular_polygon, draw_star, draw_arrow};
 use crate::server;
 use crate::client;
-use crate::events::{DrawLineEvent, NetworkEvent};
+use crate::events::{DrawShapeEvent, NetworkEvent};
 use crate::model::timestamp_id;
 use std::time::Duration;
 
@@ -16,23 +15,26 @@ impl eframe::App for PaintApp {
         let mut received_any = false;
         while let Ok(ev) = self.incoming_draw_rx.try_recv() {
             match ev {
-                NetworkEvent::DrawLine(draw) => {
-                    let line = draw.to_line();
+                NetworkEvent::DrawShape(draw) => {
+                    let shape = draw.to_shape();
                     // Ajouter au layer actif
+                    // Upsert par id pour avoir une prévisualisation temps réel
+                    // (les updates d'un même trait remplacent la version précédente).
                     if let Some(active_layer) = self.layer_manager.get_active_layer_mut() {
-                        if let Some(existing) = active_layer.elements.iter_mut().find(|l| l.id() == line.id()) {
-                            *existing = line;
+                        if let Some(existing) = active_layer.elements.iter_mut().find(|l| l.id() == shape.id()) {
+                            *existing = shape;
                         } else {
-                            self.apply_action(&PaintAction::Create(vec![line]));
+                            // Appliqué sans passer par execute pour ne pas remplir l'undo local.
+                            self.apply_action(&PaintAction::Create(vec![shape]));
                         }
                     }
                     received_any = true;
                 }
-                NetworkEvent::DeleteLine(id) => {
+                NetworkEvent::DeleteShape(id) => {
                     if let Some(active_layer) = self.layer_manager.get_active_layer() {
                         if let Some((idx, _)) = active_layer.elements.iter().enumerate().find(|(_, l)| l.id() == id) {
-                            let line = active_layer.elements[idx].clone();
-                            self.apply_action(&PaintAction::Delete(vec![idx], vec![line]));
+                            let shape = active_layer.elements[idx].clone();
+                            self.apply_action(&PaintAction::Delete(vec![idx], vec![shape]));
                             received_any = true;
                         }
                     }
@@ -195,7 +197,25 @@ impl eframe::App for PaintApp {
             ui.separator();
             ui.label("Outils");
             ui.selectable_value(&mut self.mode, BrushMode::Freehand, "✏ Dessin");
-            ui.selectable_value(&mut self.mode, BrushMode::StraightLine, "📏 Ligne");
+            ui.selectable_value(&mut self.mode, BrushMode::Shape, format!("🔺 Forme: {}", self.selected_shape.label()));
+            ui.menu_button("Changer forme", |ui| {
+                let kinds = [
+                    ShapeKind::Line,
+                    ShapeKind::Rectangle,
+                    ShapeKind::Oval,
+                    ShapeKind::Triangle,
+                    ShapeKind::Pentagon,
+                    ShapeKind::Hexagon,
+                    ShapeKind::Octagon,
+                    ShapeKind::Star,
+                    ShapeKind::Arrow,
+                ];
+                for kind in kinds {
+                    if ui.selectable_value(&mut self.selected_shape, kind, kind.label()).clicked() {
+                        self.mode = BrushMode::Shape;
+                    }
+                }
+            });
             ui.selectable_value(&mut self.mode, BrushMode::Eraser, "🧽 Gomme");
             ui.selectable_value(&mut self.mode, BrushMode::Select, "🖱 Sélection");
 
@@ -305,7 +325,7 @@ impl eframe::App for PaintApp {
         // --- 5. PANNEAU DES LAYERS (DROITE) ---
         egui::SidePanel::right("layers_panel")
             .resizable(true)
-            .default_width(128.0)
+            .default_width(170.0)
             .show(ctx, |ui| {
                 ui.heading("📚 Layers");
                 ui.separator();
@@ -355,38 +375,60 @@ impl eframe::App for PaintApp {
 
                             // Dessiner une miniature du contenu du layer
                             if !layer.elements.is_empty() {
-                                // Calculer les bounds de tous les éléments du layer
-                                let mut bounds = eframe::egui::Rect::NOTHING;
+                                let mut bounds = Rect::NOTHING;
                                 for element in &layer.elements {
-                                    for &point in element.points() {
-                                        bounds.extend_with(point);
-                                    }
+                                    bounds = bounds.union(element.bounding_rect());
                                 }
 
                                 if bounds.is_finite() && bounds.width() > 0.0 && bounds.height() > 0.0 {
-                                    let scale = 50.0 / bounds.size().max_elem();
-                                    let offset = response.rect.min - bounds.min * scale + eframe::egui::vec2(5.0, 5.0);
+                                    let padding = 6.0;
+                                let preview_area = response.rect.shrink(padding);
+                                let scale = (preview_area.width() / bounds.width()).min(preview_area.height() / bounds.height());
+                                let to_preview_pos = |p: egui::Pos2| preview_area.min + (p - bounds.min) * scale;
 
-                                    // Dessiner chaque élément à échelle réduite
-                                    for element in &layer.elements {
-                                        let scaled_points: Vec<eframe::egui::Pos2> = element.points()
-                                            .iter()
-                                            .map(|&p| {
-                                                let relative = p - bounds.min;
-                                                let scaled = relative * scale;
-                                                let result = offset + scaled;
-                                                eframe::egui::pos2(result.x, result.y)
-                                            })
-                                            .collect();
-
-                                        if scaled_points.len() >= 2 {
-                                            let stroke = eframe::egui::Stroke::new(
-                                                (element.width() * scale).max(0.5),
-                                                element.color()
-                                            );
-                                            painter.add(eframe::egui::Shape::line(scaled_points, stroke));
+                                for element in &layer.elements {
+                                    let stroke = Stroke::new((element.width() * scale).max(0.5), element.color());
+                                    
+                                    #[allow(unreachable_patterns)] // cest pas grave si les nouveaux sont pas dans preview
+                                    match element {
+                                        PaintShape::Line { points, .. } => {
+                                            let scaled_points: Vec<egui::Pos2> = points.iter()
+                                                .map(|p| to_preview_pos(*p))
+                                                .collect();
+                                            if scaled_points.len() >= 2 {
+                                                painter.add(Shape::line(scaled_points, stroke));
+                                            } else if let Some(point) = scaled_points.first() {
+                                                painter.circle_stroke(*point, 1.0, stroke);
+                                            }
                                         }
+                                        PaintShape::Rectangle { start, end, .. } => {
+                                            let scaled_start = to_preview_pos(*start);
+                                            let scaled_end = to_preview_pos(*end);
+                                            painter.rect_stroke(Rect::from_two_pos(scaled_start, scaled_end), 0.0, stroke);
+                                        }
+                                        PaintShape::Oval { start, end, .. } => {
+                                            let scaled_start = to_preview_pos(*start);
+                                            let scaled_end = to_preview_pos(*end);
+                                            draw_ellipse(&painter, Rect::from_two_pos(scaled_start, scaled_end), stroke);
+                                        }
+                                        PaintShape::RegularPolygon { start, end, sides, .. } => {
+                                            let scaled_start = to_preview_pos(*start);
+                                            let scaled_end = to_preview_pos(*end);
+                                            draw_regular_polygon(&painter, Rect::from_two_pos(scaled_start, scaled_end), *sides as usize, stroke);
+                                        }
+                                        PaintShape::Star { start, end, points, .. } => {
+                                            let scaled_start = to_preview_pos(*start);
+                                            let scaled_end = to_preview_pos(*end);
+                                            draw_star(&painter, Rect::from_two_pos(scaled_start, scaled_end), *points as usize, stroke);
+                                        }
+                                        PaintShape::Arrow { start, end, .. } => {
+                                            let scaled_start = to_preview_pos(*start);
+                                            let scaled_end = to_preview_pos(*end);
+                                            draw_arrow(&painter, scaled_start, scaled_end, stroke);
+                                        }
+                                        _ => print!("Shape type not supported in the layer preview at this time. ")
                                     }
+                                }
                                 }
                             }
 
@@ -439,15 +481,18 @@ impl eframe::App for PaintApp {
                             });
                         });
                     });
-
                     if let Some(preview_rect) = preview_rect {
                         let click_response = ui.allocate_rect(preview_rect, egui::Sense::click_and_drag());
 
-                        if click_response.clicked() { //&& self.layers_panel_rename_id.is_none() {
+                        if click_response.clicked() {
+                            self.layers_panel_rename_id = None;
+
                             layer_to_select = Some(layer_id);
                         }
 
                         if click_response.drag_started() {
+                            self.layers_panel_rename_id = None;
+
                             self.layers_drag_source = Some(idx);
                         }
                         if click_response.hovered() && self.layers_drag_source.is_some() && click_response.drag_released() {
@@ -463,14 +508,14 @@ impl eframe::App for PaintApp {
                 });
 
                 // Effectuer les actions différées
+                if let Some((layer_id, new_name)) = layer_rename {
+                    self.rename_layer(layer_id, new_name);
+                }
                 if let Some(layer_id) = layer_to_select {
                     self.set_active_layer(layer_id);
                 }
                 if let Some(layer_id) = layer_to_delete {
                     self.delete_layer(layer_id);
-                }
-                if let Some((layer_id, new_name)) = layer_rename {
-                    self.rename_layer(layer_id, new_name);
                 }
                 if let Some(layer_id) = layer_visibility_toggle {
                     self.toggle_layer_visibility(layer_id);
@@ -490,14 +535,14 @@ impl eframe::App for PaintApp {
 
             if let Some(pos) = pointer {
                 match self.mode {
-                    BrushMode::Freehand | BrushMode::StraightLine => {
+                    BrushMode::Freehand | BrushMode::Shape => {
                         if response.dragged() {
                             if self.current_line.is_empty() {
                                 self.active_stroke_id = Some(timestamp_id());
                                 self.current_line.push(pos);
                             }
 
-                            if self.mode == BrushMode::StraightLine {
+                            if self.mode == BrushMode::Shape {
                                 if self.current_line.len() == 1 {
                                     self.current_line.push(pos);
                                 } else {
@@ -513,15 +558,67 @@ impl eframe::App for PaintApp {
                                 }
                             }
 
-                            // Envoi incrémental: même id pendant tout le drag => remote temps réel.
                             if let Some(stroke_id) = self.active_stroke_id {
-                                let preview = PaintShape::Line {
-                                    id: stroke_id,
-                                    points: self.current_line.clone(),
-                                    color: self.brush_color,
-                                    width: self.brush_size,
+                                let preview = if self.mode == BrushMode::Freehand {
+                                    PaintShape::Line {
+                                        id: stroke_id,
+                                        points: self.current_line.clone(),
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    }
+                                } else {
+                                    let start = self.current_line[0];
+                                    let end = self.current_line[1];
+                                    match self.selected_shape {
+                                        ShapeKind::Line => PaintShape::Line {
+                                            id: stroke_id,
+                                            points: self.current_line.clone(),
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Rectangle => PaintShape::Rectangle {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Oval => PaintShape::Oval {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Triangle
+                                        | ShapeKind::Pentagon
+                                        | ShapeKind::Hexagon
+                                        | ShapeKind::Octagon => PaintShape::RegularPolygon {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            sides: self.selected_shape.sides(),
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Star => PaintShape::Star {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            points: 5,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                        ShapeKind::Arrow => PaintShape::Arrow {
+                                            id: stroke_id,
+                                            start,
+                                            end,
+                                            color: self.brush_color,
+                                            width: self.brush_size,
+                                        },
+                                    }
                                 };
-                                let ev = NetworkEvent::DrawLine(DrawLineEvent::from_line(&preview));
+                                let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(&preview));
                                 if self.server_running {
                                     let _ = server::publish_network_event(ev);
                                 } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
@@ -530,10 +627,67 @@ impl eframe::App for PaintApp {
                             }
                         } else if response.drag_released() && !self.current_line.is_empty() {
                             let points = std::mem::take(&mut self.current_line);
-                            let line_id = self.active_stroke_id.take().unwrap_or_else(timestamp_id);
-                            let line = PaintShape::Line { id: line_id, points, color: self.brush_color, width: self.brush_size };
-                            // Enregistrer localement (undo + propagation via execute)
-                            self.execute(PaintAction::Create(vec![line.clone()]));
+                            let shape_id = self.active_stroke_id.take().unwrap_or_else(timestamp_id);
+                            let shape = if self.mode == BrushMode::Freehand {
+                                PaintShape::Line {
+                                    id: shape_id,
+                                    points,
+                                    color: self.brush_color,
+                                    width: self.brush_size,
+                                }
+                            } else {
+                                let start = points[0];
+                                let end = points.get(1).cloned().unwrap_or(start);
+                                match self.selected_shape {
+                                    ShapeKind::Line => PaintShape::Line {
+                                        id: shape_id,
+                                        points,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Rectangle => PaintShape::Rectangle {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Oval => PaintShape::Oval {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Triangle
+                                    | ShapeKind::Pentagon
+                                    | ShapeKind::Hexagon
+                                    | ShapeKind::Octagon => PaintShape::RegularPolygon {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        sides: self.selected_shape.sides(),
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Star => PaintShape::Star {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        points: 5,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                    ShapeKind::Arrow => PaintShape::Arrow {
+                                        id: shape_id,
+                                        start,
+                                        end,
+                                        color: self.brush_color,
+                                        width: self.brush_size,
+                                    },
+                                }
+                            };
+                            self.execute(PaintAction::Create(vec![shape]));
                         }
                     },
                     BrushMode::Eraser => {
@@ -541,7 +695,7 @@ impl eframe::App for PaintApp {
                             let mut to_del = None;
                             if let Some(layer) = self.layer_manager.get_active_layer() {
                                 for (i, shape) in layer.elements.iter().enumerate() {
-                                    if shape.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < self.brush_size) {
+                                    if shape.distance_to(pos) < self.brush_size {
                                         to_del = Some(i);
                                         break;
                                     }
@@ -559,11 +713,12 @@ impl eframe::App for PaintApp {
                     },
                     BrushMode::Select => {
                         if response.drag_started() {
-                            let mut hit = self.selected_indices.iter().find(|&&i| self.get_line_rect(i).contains(pos)).cloned();
+                            let mut hit = self.selected_indices.iter().find(|&&i| self.get_shape_rect(i).contains(pos)).cloned();
                             if hit.is_none() {
                                 if let Some(layer) = self.layer_manager.get_active_layer() {
                                     hit = layer.elements.iter().enumerate().find(|(_, l)| 
-                                        l.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < 10.0)).map(|(i, _)| i);
+                                        l.distance_to(pos) < 10.0
+                                    ).map(|(i, _)| i);
                                 }
                             }
                             if let Some(idx) = hit {
@@ -581,10 +736,10 @@ impl eframe::App for PaintApp {
                                 self.drag_accumulated_delta += delta;
                                 if let Some(layer) = self.layer_manager.get_active_layer_mut() {
                                     for &idx in &self.selected_indices {
-                                        if let Some(s) = layer.elements.get_mut(idx) {
-                                            for p in s.points_mut() { *p += delta; }
+                                        if let Some(shape) = layer.elements.get_mut(idx) {
+                                            shape.translate(delta);
                                             // Envoyer la position mise à jour en temps réel.
-                                            let ev = NetworkEvent::DrawLine(DrawLineEvent::from_line(s));
+                                            let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape));
                                             if self.server_running {
                                                 let _ = server::publish_network_event(ev);
                                             } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
@@ -604,8 +759,8 @@ impl eframe::App for PaintApp {
                                     // Annulation temporaire pour enregistrer le mouvement propre dans l'undo
                                     if let Some(layer) = self.layer_manager.get_active_layer_mut() {
                                         for &idx in &self.selected_indices {
-                                            if let Some(s) = layer.elements.get_mut(idx) { 
-                                                for p in s.points_mut() { *p -= total; } 
+                                            if let Some(shape) = layer.elements.get_mut(idx) {
+                                                shape.translate(-total);
                                             }
                                         }
                                     }
@@ -615,7 +770,7 @@ impl eframe::App for PaintApp {
                             } else if let Some(rect) = self.selection_rect.take() {
                                 if let Some(layer) = self.layer_manager.get_active_layer() {
                                     self.selected_indices = layer.elements.iter().enumerate()
-                                        .filter(|(_, l)| l.points().iter().any(|p| rect.contains(*p)))
+                                        .filter(|(_, l)| l.bounding_rect().intersects(rect))
                                         .map(|(i, _)| i).collect();
                                 }
                                 self.selection_start_pos = None;
@@ -629,15 +784,38 @@ impl eframe::App for PaintApp {
 
             // Dessiner les éléments visibles (tous les layers, du fond vers le sommet)
             for shape in self.get_visible_elements().iter() {
-                painter.add(egui::Shape::line(shape.points().clone(), Stroke::new(shape.width(), shape.color())));
+                match shape {
+                    PaintShape::Line { points, width, color, .. } => {
+                        painter.add(egui::Shape::line(points.clone(), Stroke::new(*width, *color)));
+                    }
+                    PaintShape::Rectangle { start, end, width, color, .. } => {
+                        painter.rect_stroke(Rect::from_two_pos(*start, *end), 0.0, Stroke::new(*width, *color));
+                    }
+                    PaintShape::Oval { start, end, width, color, .. } => {
+                        let rect = Rect::from_two_pos(*start, *end);
+                        draw_ellipse(&painter, rect, Stroke::new(*width, *color));
+                    }
+                    PaintShape::RegularPolygon { start, end, sides, width, color, .. } => {
+                        draw_regular_polygon(&painter, Rect::from_two_pos(*start, *end), *sides as usize, Stroke::new(*width, *color));
+                    }
+                    PaintShape::Star { start, end, points, width, color, .. } => {
+                        draw_star(&painter, Rect::from_two_pos(*start, *end), *points as usize, Stroke::new(*width, *color));
+                    }
+                    PaintShape::Arrow { start, end, width, color, .. } => {
+                        draw_arrow(&painter, *start, *end, Stroke::new(*width, *color));
+                    }
+                }
             }
-            
-            // Dessiner les sélections avec rectangle pointillé
+            // Dessiner les sélections avec rectangle pointillé (pour le layer actif uniquement)
             if self.mode == BrushMode::Select {
-                for &idx in &self.selected_indices {
-                    let r = self.get_line_rect(idx);
-                    draw_dashed_rect(&painter, r, Color32::WHITE);
-                    draw_dashed_rect(&painter, r.expand(1.0), Color32::BLACK);
+                if let Some(layer) = self.layer_manager.get_active_layer() {
+                    for &idx in &self.selected_indices {
+                        if let Some(shape) = layer.elements.get(idx) {
+                            let r = shape.bounding_rect();
+                            draw_dashed_rect(&painter, r, Color32::WHITE);
+                            draw_dashed_rect(&painter, r.expand(1.0), Color32::BLACK);
+                        }
+                    }
                 }
             }
 
@@ -647,9 +825,37 @@ impl eframe::App for PaintApp {
                 painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)));
             }
 
-            // Dessiner la ligne en cours de tracé
+            // Dessiner la forme en cours de tracé
             if !self.current_line.is_empty() {
-                painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                if self.mode == BrushMode::Shape {
+                    let start = self.current_line[0];
+                    let end = self.current_line[1];
+                    match self.selected_shape {
+                        ShapeKind::Line => {
+                            painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                        }
+                        ShapeKind::Rectangle => {
+                            painter.rect_stroke(Rect::from_two_pos(start, end), 0.0, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Oval => {
+                            draw_ellipse(&painter, Rect::from_two_pos(start, end), Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Triangle
+                        | ShapeKind::Pentagon
+                        | ShapeKind::Hexagon
+                        | ShapeKind::Octagon => {
+                            draw_regular_polygon(&painter, Rect::from_two_pos(start, end), self.selected_shape.sides() as usize, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Star => {
+                            draw_star(&painter, Rect::from_two_pos(start, end), 5, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                        ShapeKind::Arrow => {
+                            draw_arrow(&painter, start, end, Stroke::new(self.brush_size, self.brush_color));
+                        }
+                    }
+                } else {
+                    painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                }
             }
 
             // Dessiner le curseur de la gomme

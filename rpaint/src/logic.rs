@@ -1,7 +1,7 @@
 use crate::model::*;
-use crate::events::{DrawLineEvent, NetworkEvent};
+use crate::events::{DrawShapeEvent, NetworkEvent};
 use crate::server;
-use eframe::egui::{Pos2, Rect, Vec2};
+use eframe::egui::{Rect, Vec2};
 
 impl PaintApp {
     fn send_network_event(&self, event: NetworkEvent) {
@@ -13,15 +13,6 @@ impl PaintApp {
     }
 
     // --- UTILITAIRES POUR ACCÉDER AUX ÉLÉMENTS DU LAYER ACTIF ---
-
-    /// Retourne tous les éléments du layer actif
-    fn get_active_layer_elements(&self) -> Vec<&Shape> {
-        if let Some(layer) = self.layer_manager.get_active_layer() {
-            layer.elements.iter().collect()
-        } else {
-            Vec::new()
-        }
-    }
 
     /// Retourne les indices corrigés pour le layer actif
     /// (les indices stockés dans selected_indices sont locaux au layer actif)
@@ -101,6 +92,15 @@ impl PaintApp {
                     }
                     *id = timestamp_id();
                 }
+                Shape::Rectangle { start, end, id, .. }
+                | Shape::Oval { start, end, id, .. }
+                | Shape::RegularPolygon { start, end, id, .. }
+                | Shape::Star { start, end, id, .. }
+                | Shape::Arrow { start, end, id, .. } => {
+                    *start += offset;
+                    *end += offset;
+                    *id = timestamp_id();
+                }
             }
         }
         self.execute(PaintAction::Create(new_shapes.clone()));
@@ -113,7 +113,7 @@ impl PaintApp {
         self.selected_indices = (start_idx..start_idx + self.clipboard.len()).collect();
     }
 
-    // --- SYSTÈME UNDO/REDO ---
+    // --- SYSTEME UNDO/REDO ---
 
     // Exécute une action, l'applique au modèle, puis la pousse dans la pile undo.
     pub fn execute(&mut self, action: PaintAction) {
@@ -123,24 +123,25 @@ impl PaintApp {
         match &action {
             PaintAction::Create(shapes) => {
                 for shape in shapes {
-                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                    self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                 }
             }
             PaintAction::Delete(_, shapes) => {
                 for shape in shapes {
-                    self.send_network_event(NetworkEvent::DeleteLine(shape.id()));
+                    self.send_network_event(NetworkEvent::DeleteShape(shape.id()));
+
                 }
             }
             PaintAction::Modify(_, _, new_shapes) => {
                 for shape in new_shapes {
-                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                    self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                 }
             }
             PaintAction::Move(indices, _) => {
                 if let Some(layer) = self.layer_manager.get_active_layer() {
                     for &idx in indices {
                         if let Some(shape) = layer.elements.get(idx) {
-                            self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                            self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                         }
                     }
                 }
@@ -210,13 +211,7 @@ impl PaintApp {
                 if let Some(layer) = self.get_active_layer_mut() {
                     for &idx in indices {
                         if let Some(shape) = layer.elements.get_mut(idx) {
-                            match shape {
-                                Shape::Line { points, .. } => {
-                                    for p in points {
-                                        *p += *delta;
-                                    }
-                                }
-                            }
+                            shape.translate(*delta);
                         }
                     }
                 }
@@ -272,7 +267,7 @@ impl PaintApp {
                 // Actions réseau ne devraient pas être dans l'historique
                 PaintAction::NetworkCreateLayer { .. } | PaintAction::NetworkDeleteLayer { .. } | PaintAction::NetworkRenameLayer { .. } | PaintAction::NetworkSetLayerVisibility { .. } | PaintAction::NetworkSetActiveLayer { .. } | PaintAction::NetworkReorderLayers { .. } => {
                     // Ne rien faire - ces actions ne devraient pas être dans l'historique
-                }
+                },
                 PaintAction::Create(shapes) => {
                     // Supprimer par id
                     let mut ids: Vec<u64> = shapes.iter().map(|s| s.id()).collect();
@@ -283,9 +278,9 @@ impl PaintApp {
                     }
                     // Informer les autres clients que ces formes ont été annulées.
                     for s in shapes {
-                        self.send_network_event(NetworkEvent::DeleteLine(s.id()));
+                        self.send_network_event(NetworkEvent::DeleteShape(s.id()));
                     }
-                }
+                },
                 PaintAction::Delete(indices, shapes) => {
                     let mut combined: Vec<_> = indices.iter().zip(shapes.iter()).collect();
                     combined.sort_by_key(|&(&idx, _)| idx);
@@ -299,9 +294,9 @@ impl PaintApp {
 
                     // Undo d'une suppression = recréer ces formes sur les autres clients.
                     for shape in shapes {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
-                }
+                },
                 PaintAction::Modify(indices, old_shapes, _) => {
                     if let Some(layer) = self.get_active_layer_mut() {
                         for (i, &idx) in indices.iter().enumerate() {
@@ -313,20 +308,15 @@ impl PaintApp {
 
                     // Undo d'une modification = repousser l'ancienne version.
                     for shape in old_shapes {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
+
                     }
-                }
+                },
                 PaintAction::Move(indices, delta) => {
                     if let Some(layer) = self.get_active_layer_mut() {
                         for &idx in indices {
                             if let Some(shape) = layer.elements.get_mut(idx) {
-                                match shape {
-                                    Shape::Line { points, .. } => {
-                                        for p in points {
-                                            *p -= *delta;
-                                        }
-                                    }
-                                }
+                                shape.translate(-*delta);
                             }
                         }
                     }
@@ -335,7 +325,7 @@ impl PaintApp {
                     if let Some(layer) = self.layer_manager.get_active_layer() {
                         for &idx in indices {
                             if let Some(shape) = layer.elements.get(idx) {
-                                self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                                self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                             }
                         }
                     }
@@ -394,24 +384,24 @@ impl PaintApp {
                 }
                 PaintAction::Create(shapes) => {
                     for s in shapes {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(s)));
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(s)));
                     }
                 }
                 PaintAction::Delete(_, shapes) => {
                     for s in shapes {
-                        self.send_network_event(NetworkEvent::DeleteLine(s.id()));
+                        self.send_network_event(NetworkEvent::DeleteShape(s.id()));
                     }
                 }
                 PaintAction::Modify(_, _, new_shapes) => {
                     for shape in new_shapes {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                        self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                     }
                 }
                 PaintAction::Move(indices, _) => {
                     if let Some(layer) = self.layer_manager.get_active_layer() {
                         for &idx in indices {
                             if let Some(shape) = layer.elements.get(idx) {
-                                self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                                self.send_network_event(NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape)));
                             }
                         }
                     }
@@ -443,37 +433,26 @@ impl PaintApp {
     // --- UTILITAIRES DE SÉLECTION ---
 
     // Calcule une boîte englobante pour tester rapidement si un tracé est cliqué/sélectionné.
-    pub fn get_line_rect(&self, idx: usize) -> Rect {
+    pub fn get_shape_rect(&self, idx: usize) -> Rect {
         if let Some(layer) = self.layer_manager.get_active_layer() {
             if let Some(shape) = layer.elements.get(idx) {
-                match shape {
-                    Shape::Line { points, width, .. } => {
-                        let mut r = Rect::NOTHING;
-                        for p in points {
-                            r.extend_with(*p);
-                        }
-                        return r.expand(width / 2.0 + 5.0);
-                    }
-                }
+                return shape.bounding_rect();
             }
         }
         Rect::NOTHING
     }
 
     // --- ACTIONS POUR LES LAYERS ---
-
     pub fn create_new_layer(&mut self) {
         let new_id = timestamp_id();
-        let count = self.layer_manager.layers.len() + 1;
-        let name = format!("Layer {}", count);
+        self.last_layer_index += 1;
+        let name = format!("Layer-{}", self.last_layer_index);
         let old_active = self.layer_manager.active_layer_id;
         self.execute(PaintAction::CreateLayer { id: new_id, name, old_active });
     }
 
     pub fn delete_layer(&mut self, layer_id: u64) -> bool {
-        if self.layer_manager.layers.len() <= 1 {
-            return false;
-        }
+        if self.layer_manager.layers.len() <= 1 { return false; }
         if let Some(idx) = self.layer_manager.get_layer_index(layer_id) {
             if let Some(layer) = self.layer_manager.get_layer(layer_id) {
                 let layer_copy = layer.clone_for_undo();
@@ -523,18 +502,4 @@ impl PaintApp {
             self.selected_indices.clear();
         }
     }
-}
-
-// Distance entre un point et un segment.
-// Utilisé par la gomme et la sélection pour savoir si le pointeur "touche" un trait.
-pub fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
-    let l2 = a.distance_sq(b);
-    if l2 == 0.0 {
-        return p.distance(a);
-    }
-    let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
-    p.distance(Pos2::new(
-        a.x + t.clamp(0.0, 1.0) * (b.x - a.x),
-        a.y + t.clamp(0.0, 1.0) * (b.y - a.y),
-    ))
 }

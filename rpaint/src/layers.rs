@@ -35,15 +35,6 @@ impl Layer {
         self.elements.push(shape);
     }
 
-    /// Supprime un élément par index
-    pub fn remove_element(&mut self, idx: usize) -> Option<Shape> {
-        if idx < self.elements.len() {
-            Some(self.elements.remove(idx))
-        } else {
-            None
-        }
-    }
-
     /// Clone le layer pour les opérations undo/redo
     pub fn clone_for_undo(&self) -> Layer {
         Layer {
