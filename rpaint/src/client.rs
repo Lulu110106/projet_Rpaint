@@ -45,6 +45,8 @@ pub async fn run(
                     match &mut ev {
                         NetworkEvent::DrawLine(d) => { d.source_id = client_id; }
                         NetworkEvent::DeleteLine(_) => {}
+                        // Les événements de layers sont transmis tels quels
+                        _ => {}
                     }
                     if let Ok(payload) = serde_json::to_string(&ev) {
                         if write.send(Message::Text(payload)).await.is_err() {

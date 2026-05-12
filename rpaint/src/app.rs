@@ -18,23 +18,51 @@ impl eframe::App for PaintApp {
             match ev {
                 NetworkEvent::DrawLine(draw) => {
                     let line = draw.to_line();
-                    // Upsert par id pour avoir une prévisualisation temps réel
-                    // (les updates d'un même trait remplacent la version précédente).
-                    if let Some(existing) = self.lines.iter_mut().find(|l| l.id() == line.id()) {
-                        *existing = line;
-                    } else {
-                        // Appliqué sans passer par execute pour ne pas remplir l'undo local.
-                        self.apply_action(&PaintAction::Create(vec![line]));
+                    // Ajouter au layer actif
+                    if let Some(active_layer) = self.layer_manager.get_active_layer_mut() {
+                        if let Some(existing) = active_layer.elements.iter_mut().find(|l| l.id() == line.id()) {
+                            *existing = line;
+                        } else {
+                            self.apply_action(&PaintAction::Create(vec![line]));
+                        }
                     }
                     received_any = true;
                 }
                 NetworkEvent::DeleteLine(id) => {
-                    // Trouver la ligne par id et la supprimer (sans enregistrer dans undo).
-                    if let Some((idx, _)) = self.lines.iter().enumerate().find(|(_, l)| l.id() == id) {
-                        let line = self.lines[idx].clone();
-                        self.apply_action(&PaintAction::Delete(vec![idx], vec![line]));
-                        received_any = true;
+                    if let Some(active_layer) = self.layer_manager.get_active_layer() {
+                        if let Some((idx, _)) = active_layer.elements.iter().enumerate().find(|(_, l)| l.id() == id) {
+                            let line = active_layer.elements[idx].clone();
+                            self.apply_action(&PaintAction::Delete(vec![idx], vec![line]));
+                            received_any = true;
+                        }
                     }
+                }
+                // Gestion des événements de layers
+                NetworkEvent::CreateLayer { id, name, position } => {
+                    if self.layer_manager.get_layer(id).is_none() {
+                        self.apply_action(&PaintAction::NetworkCreateLayer { id, name: name.clone(), position });
+                    }
+                    received_any = true;
+                }
+                NetworkEvent::DeleteLayer { id } => {
+                    self.apply_action(&PaintAction::NetworkDeleteLayer { id });
+                    received_any = true;
+                }
+                NetworkEvent::RenameLayer { id, name } => {
+                    self.apply_action(&PaintAction::NetworkRenameLayer { id, name: name.clone() });
+                    received_any = true;
+                }
+                NetworkEvent::SetLayerVisibility { id, visible } => {
+                    self.apply_action(&PaintAction::NetworkSetLayerVisibility { id, visible });
+                    received_any = true;
+                }
+                NetworkEvent::SetActiveLayer { id } => {
+                    self.apply_action(&PaintAction::NetworkSetActiveLayer { id });
+                    received_any = true;
+                }
+                NetworkEvent::ReorderLayers { from_idx, to_idx } => {
+                    self.apply_action(&PaintAction::NetworkReorderLayers { from_idx, to_idx });
+                    received_any = true;
                 }
             }
         }
@@ -238,23 +266,27 @@ impl eframe::App for PaintApp {
                 
                 ui.vertical_centered_justified(|ui| {
                     if ui.button("🎨 Appliquer Couleur").clicked() {
-                        let old = self.selected_indices.iter().filter_map(|&i| self.lines.get(i).cloned()).collect();
-                        let new = self.selected_indices.iter().filter_map(|&i| {
-                            let mut l = self.lines.get(i).cloned()?;
-                            l.set_color(self.brush_color);
-                            Some(l)
-                        }).collect();
-                        self.execute(PaintAction::Modify(self.selected_indices.clone(), old, new));
+                        if let Some(layer) = self.layer_manager.get_active_layer() {
+                            let old: Vec<_> = self.selected_indices.iter().filter_map(|&i| layer.elements.get(i).cloned()).collect();
+                            let new: Vec<_> = self.selected_indices.iter().filter_map(|&i| {
+                                let mut s = layer.elements.get(i).cloned()?;
+                                s.set_color(self.brush_color);
+                                Some(s)
+                            }).collect();
+                            self.execute(PaintAction::Modify(self.selected_indices.clone(), old, new));
+                        }
                     }
                     
                     if ui.button("📏 Appliquer Taille").clicked() {
-                        let old = self.selected_indices.iter().filter_map(|&i| self.lines.get(i).cloned()).collect();
-                        let new = self.selected_indices.iter().filter_map(|&i| {
-                            let mut l = self.lines.get(i).cloned()?;
-                            l.set_width(self.brush_size);
-                            Some(l)
-                        }).collect();
-                        self.execute(PaintAction::Modify(self.selected_indices.clone(), old, new));
+                        if let Some(layer) = self.layer_manager.get_active_layer() {
+                            let old: Vec<_> = self.selected_indices.iter().filter_map(|&i| layer.elements.get(i).cloned()).collect();
+                            let new: Vec<_> = self.selected_indices.iter().filter_map(|&i| {
+                                let mut s = layer.elements.get(i).cloned()?;
+                                s.set_width(self.brush_size);
+                                Some(s)
+                            }).collect();
+                            self.execute(PaintAction::Modify(self.selected_indices.clone(), old, new));
+                        }
                     }
 
                     if ui.button("🗑 Supprimer").clicked() { self.delete_selected(); }
@@ -263,15 +295,197 @@ impl eframe::App for PaintApp {
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.add_space(10.0);
-                if ui.add_enabled(!self.lines.is_empty(), egui::Button::new("💣 Tout effacer")).clicked() {
+                let can_clear = self.layer_manager.get_active_layer().map_or(false, |l| !l.elements.is_empty());
+                if ui.add_enabled(can_clear, egui::Button::new("💣 Tout effacer")).clicked() {
                     self.clear_all();
                 }
             });
         });
 
+        // --- 5. PANNEAU DES LAYERS (DROITE) ---
+        egui::SidePanel::right("layers_panel")
+            .resizable(true)
+            .default_width(128.0)
+            .show(ctx, |ui| {
+                ui.heading("📚 Layers");
+                ui.separator();
+                // Bouton pour créer un nouveau layer
+                if ui.button("➕ Nouveau layer").clicked() {
+                    self.create_new_layer();
+                }
+
+                // Afficher tous les layers
+                let mut layer_to_delete = None;
+                let mut layer_rename = None;
+                let mut layer_visibility_toggle = None;
+                let mut reorder_from = None;
+                let mut reorder_to = None;
+                let mut layer_to_select = None;
+
+                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                for (idx, layer) in self.layer_manager.layers.iter().enumerate() {
+                    let is_active = layer.id == self.layer_manager.active_layer_id;
+                    let bg_color = if is_active {
+                        Color32::from_rgb(50, 100, 150)
+                    } else {
+                        Color32::from_rgb(40, 40, 40)
+                    };
+
+                    let frame = egui::Frame::default()
+                        .fill(bg_color)
+                        .inner_margin(4.0)
+                        .outer_margin(4.0);
+
+                    let layer_id = layer.id;
+                    let layer_name = layer.name.clone();
+                    let layer_visible = layer.visible;
+
+                    let mut preview_rect = None;
+                    let _frame_response = frame.show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // Aperçu du layer (miniature du contenu)
+                            let (response, painter) = ui.allocate_painter(
+                                egui::vec2(64.0, 64.0),
+                                egui::Sense::click_and_drag(),
+                            );
+                            preview_rect = Some(response.rect);
+
+                            // Fond de la preview
+                            painter.rect_filled(response.rect, 2.0, Color32::from_rgb(60, 60, 60));
+
+                            // Dessiner une miniature du contenu du layer
+                            if !layer.elements.is_empty() {
+                                // Calculer les bounds de tous les éléments du layer
+                                let mut bounds = eframe::egui::Rect::NOTHING;
+                                for element in &layer.elements {
+                                    for &point in element.points() {
+                                        bounds.extend_with(point);
+                                    }
+                                }
+
+                                if bounds.is_finite() && bounds.width() > 0.0 && bounds.height() > 0.0 {
+                                    let scale = 50.0 / bounds.size().max_elem();
+                                    let offset = response.rect.min - bounds.min * scale + eframe::egui::vec2(5.0, 5.0);
+
+                                    // Dessiner chaque élément à échelle réduite
+                                    for element in &layer.elements {
+                                        let scaled_points: Vec<eframe::egui::Pos2> = element.points()
+                                            .iter()
+                                            .map(|&p| {
+                                                let relative = p - bounds.min;
+                                                let scaled = relative * scale;
+                                                let result = offset + scaled;
+                                                eframe::egui::pos2(result.x, result.y)
+                                            })
+                                            .collect();
+
+                                        if scaled_points.len() >= 2 {
+                                            let stroke = eframe::egui::Stroke::new(
+                                                (element.width() * scale).max(0.5),
+                                                element.color()
+                                            );
+                                            painter.add(eframe::egui::Shape::line(scaled_points, stroke));
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Afficher le compteur d'elements en overlay
+                            if !layer.elements.is_empty() {
+                                painter.text(
+                                    response.rect.right_bottom() + eframe::egui::vec2(-2.0, -2.0),
+                                    eframe::egui::Align2::RIGHT_BOTTOM,
+                                    format!("{}", layer.elements.len()),
+                                    eframe::egui::FontId::proportional(10.0),
+                                    Color32::WHITE,
+                                );
+                            }
+
+                            ui.vertical_centered(|ui| {
+                                // Nom du layer (editable)
+                                if self.layers_panel_rename_id == Some(layer_id) {
+                                    let mut text = self.layers_panel_rename_text.clone();
+                                    let response = ui.text_edit_singleline(&mut text);
+                                    self.layers_panel_rename_text = text;
+                                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                        self.layers_panel_rename_id = None;
+                                    }
+                                    else if response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                        if !self.layers_panel_rename_text.trim().is_empty() {
+                                            layer_rename = Some((layer_id, self.layers_panel_rename_text.clone()));
+                                        }
+                                        self.layers_panel_rename_id = None;
+                                    }
+                                } else {
+                                    let response = ui.add(egui::Label::new(&layer_name).sense(egui::Sense::click()));
+                                    if response.double_clicked() {
+                                        self.layers_panel_rename_id = Some(layer_id);
+                                        self.layers_panel_rename_text = layer_name.clone();
+                                    }
+                                }
+
+                                ui.horizontal(|ui| {
+                                    // Bouton visibilite (oeil)
+                                    let eye_icon = if layer_visible { "👁✅" } else { "👁❌" };
+                                    if ui.button(eye_icon).clicked() {
+                                        layer_visibility_toggle = Some(layer_id);
+                                    }
+
+                                    // Bouton supprimer
+                                    if ui.button("🗑").clicked() {
+                                        layer_to_delete = Some(layer_id);
+                                    }
+                                });
+                            });
+                        });
+                    });
+
+                    if let Some(preview_rect) = preview_rect {
+                        let click_response = ui.allocate_rect(preview_rect, egui::Sense::click_and_drag());
+
+                        if click_response.clicked() { //&& self.layers_panel_rename_id.is_none() {
+                            layer_to_select = Some(layer_id);
+                        }
+
+                        if click_response.drag_started() {
+                            self.layers_drag_source = Some(idx);
+                        }
+                        if click_response.hovered() && self.layers_drag_source.is_some() && click_response.drag_released() {
+                            if let Some(from_idx) = self.layers_drag_source.take() {
+                                if from_idx != idx {
+                                    reorder_from = Some(from_idx);
+                                    reorder_to = Some(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+                });
+
+                // Effectuer les actions différées
+                if let Some(layer_id) = layer_to_select {
+                    self.set_active_layer(layer_id);
+                }
+                if let Some(layer_id) = layer_to_delete {
+                    self.delete_layer(layer_id);
+                }
+                if let Some((layer_id, new_name)) = layer_rename {
+                    self.rename_layer(layer_id, new_name);
+                }
+                if let Some(layer_id) = layer_visibility_toggle {
+                    self.toggle_layer_visibility(layer_id);
+                }
+                if let (Some(from), Some(to)) = (reorder_from, reorder_to) {
+                    self.reorder_layers(from, to);
+                }
+            });
+
         // --- 3. ZONE DE DESSIN (CENTRE) ---
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
+            // Calculer la zone de dessin en tenant compte du panel des layers
+            let available_size = ui.available_size();
+            let drawing_size = egui::vec2(available_size.x, available_size.y);
+            let (response, painter) = ui.allocate_painter(drawing_size, egui::Sense::click_and_drag());
             let pointer = response.interact_pointer_pos();
 
             if let Some(pos) = pointer {
@@ -325,15 +539,21 @@ impl eframe::App for PaintApp {
                     BrushMode::Eraser => {
                         if response.dragged() || response.clicked() {
                             let mut to_del = None;
-                            for (i, line) in self.lines.iter().enumerate() {
-                                if line.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < self.brush_size) {
-                                    to_del = Some(i); break;
+                            if let Some(layer) = self.layer_manager.get_active_layer() {
+                                for (i, shape) in layer.elements.iter().enumerate() {
+                                    if shape.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < self.brush_size) {
+                                        to_del = Some(i);
+                                        break;
+                                    }
                                 }
                             }
                             if let Some(idx) = to_del {
-                                let line = self.lines[idx].clone();
-                                // execute gère aussi la propagation réseau du Delete.
-                                self.execute(PaintAction::Delete(vec![idx], vec![line]));
+                                if let Some(layer) = self.layer_manager.get_active_layer() {
+                                    if let Some(shape) = layer.elements.get(idx) {
+                                        let s = shape.clone();
+                                        self.execute(PaintAction::Delete(vec![idx], vec![s]));
+                                    }
+                                }
                             }
                         }
                     },
@@ -341,8 +561,10 @@ impl eframe::App for PaintApp {
                         if response.drag_started() {
                             let mut hit = self.selected_indices.iter().find(|&&i| self.get_line_rect(i).contains(pos)).cloned();
                             if hit.is_none() {
-                                hit = self.lines.iter().enumerate().find(|(_, l)| 
-                                    l.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < 10.0)).map(|(i, _)| i);
+                                if let Some(layer) = self.layer_manager.get_active_layer() {
+                                    hit = layer.elements.iter().enumerate().find(|(_, l)| 
+                                        l.points().windows(2).any(|w| dist_to_segment(pos, w[0], w[1]) < 10.0)).map(|(i, _)| i);
+                                }
                             }
                             if let Some(idx) = hit {
                                 if !self.selected_indices.contains(&idx) { self.selected_indices = vec![idx]; }
@@ -357,15 +579,17 @@ impl eframe::App for PaintApp {
                             if self.is_dragging_items {
                                 let delta = response.drag_delta();
                                 self.drag_accumulated_delta += delta;
-                                for &idx in &self.selected_indices {
-                                    if let Some(l) = self.lines.get_mut(idx) {
-                                        for p in l.points_mut() { *p += delta; }
-                                        // Envoyer la position mise à jour en temps réel.
-                                        let ev = NetworkEvent::DrawLine(DrawLineEvent::from_line(l));
-                                        if self.server_running {
-                                            let _ = server::publish_network_event(ev);
-                                        } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
-                                            let _ = tx.send(ev);
+                                if let Some(layer) = self.layer_manager.get_active_layer_mut() {
+                                    for &idx in &self.selected_indices {
+                                        if let Some(s) = layer.elements.get_mut(idx) {
+                                            for p in s.points_mut() { *p += delta; }
+                                            // Envoyer la position mise à jour en temps réel.
+                                            let ev = NetworkEvent::DrawLine(DrawLineEvent::from_line(s));
+                                            if self.server_running {
+                                                let _ = server::publish_network_event(ev);
+                                            } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
+                                                let _ = tx.send(ev);
+                                            }
                                         }
                                     }
                                 }
@@ -378,16 +602,22 @@ impl eframe::App for PaintApp {
                                 let total = self.drag_accumulated_delta;
                                 if total.length_sq() > 0.0 {
                                     // Annulation temporaire pour enregistrer le mouvement propre dans l'undo
-                                    for &idx in &self.selected_indices {
-                                        if let Some(l) = self.lines.get_mut(idx) { for p in l.points_mut() { *p -= total; } }
+                                    if let Some(layer) = self.layer_manager.get_active_layer_mut() {
+                                        for &idx in &self.selected_indices {
+                                            if let Some(s) = layer.elements.get_mut(idx) { 
+                                                for p in s.points_mut() { *p -= total; } 
+                                            }
+                                        }
                                     }
                                     self.execute(PaintAction::Move(self.selected_indices.clone(), total));
                                 }
                                 self.is_dragging_items = false;
                             } else if let Some(rect) = self.selection_rect.take() {
-                                self.selected_indices = self.lines.iter().enumerate()
-                                    .filter(|(_, l)| l.points().iter().any(|p| rect.contains(*p)))
-                                    .map(|(i, _)| i).collect();
+                                if let Some(layer) = self.layer_manager.get_active_layer() {
+                                    self.selected_indices = layer.elements.iter().enumerate()
+                                        .filter(|(_, l)| l.points().iter().any(|p| rect.contains(*p)))
+                                        .map(|(i, _)| i).collect();
+                                }
                                 self.selection_start_pos = None;
                             }
                         }
@@ -397,11 +627,15 @@ impl eframe::App for PaintApp {
 
             // --- 4. RENDU FINAL ---
 
-            // Dessiner les lignes stockées
-            for (i, line) in self.lines.iter().enumerate() {
-                painter.add(egui::Shape::line(line.points().clone(), Stroke::new(line.width(), line.color())));
-                if self.mode == BrushMode::Select && self.selected_indices.contains(&i) {
-                    let r = self.get_line_rect(i);
+            // Dessiner les éléments visibles (tous les layers, du fond vers le sommet)
+            for shape in self.get_visible_elements().iter() {
+                painter.add(egui::Shape::line(shape.points().clone(), Stroke::new(shape.width(), shape.color())));
+            }
+            
+            // Dessiner les sélections avec rectangle pointillé
+            if self.mode == BrushMode::Select {
+                for &idx in &self.selected_indices {
+                    let r = self.get_line_rect(idx);
                     draw_dashed_rect(&painter, r, Color32::WHITE);
                     draw_dashed_rect(&painter, r.expand(1.0), Color32::BLACK);
                 }
@@ -425,7 +659,7 @@ impl eframe::App for PaintApp {
                 }
             }
         });
-    }
+        }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Some(tx) = self.server_shutdown_tx.take() {

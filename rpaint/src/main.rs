@@ -5,6 +5,7 @@ mod ui_tools;
 mod app;
 mod server;
 mod client;
+mod layers;
 
 use model::PaintApp;
 

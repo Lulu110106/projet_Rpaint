@@ -7,6 +7,13 @@ use crate::model::Shape;
 pub enum NetworkEvent {
     DrawLine(DrawLineEvent),
     DeleteLine(u64), // supprime la ligne identifiée par son id
+    // Événements pour les layers
+    CreateLayer { id: u64, name: String, position: usize },
+    DeleteLayer { id: u64 },
+    RenameLayer { id: u64, name: String },
+    SetLayerVisibility { id: u64, visible: bool },
+    SetActiveLayer { id: u64 },
+    ReorderLayers { from_idx: usize, to_idx: usize },
 }
 
 // Version réseau d'une ligne: des types simples pour pouvoir sérialiser en JSON.

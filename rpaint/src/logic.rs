@@ -12,27 +12,60 @@ impl PaintApp {
         }
     }
 
+    // --- UTILITAIRES POUR ACCÉDER AUX ÉLÉMENTS DU LAYER ACTIF ---
+
+    /// Retourne tous les éléments du layer actif
+    fn get_active_layer_elements(&self) -> Vec<&Shape> {
+        if let Some(layer) = self.layer_manager.get_active_layer() {
+            layer.elements.iter().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Retourne les indices corrigés pour le layer actif
+    /// (les indices stockés dans selected_indices sont locaux au layer actif)
+    fn get_active_layer_mut(&mut self) -> Option<&mut crate::layers::Layer> {
+        self.layer_manager.get_active_layer_mut()
+    }
+
+    /// Crée une liste plate de tous les éléments visibles pour le rendu
+    pub fn get_visible_elements(&self) -> Vec<&Shape> {
+        self.layer_manager.get_visible_elements()
+    }
+
     // --- ACTIONS DE BASE ---
 
     // Efface tout le canvas en enregistrant l'opération dans l'historique.
     pub fn clear_all(&mut self) {
-        if self.lines.is_empty() { return; }
-        let indices = (0..self.lines.len()).collect();
-        let lines = self.lines.clone();
-        self.execute(PaintAction::Delete(indices, lines));
-        self.selected_indices.clear();
+        if let Some(layer) = self.get_active_layer_mut() {
+            if layer.elements.is_empty() {
+                return;
+            }
+            let indices = (0..layer.elements.len()).collect();
+            let shapes = layer.elements.clone();
+            self.execute(PaintAction::Delete(indices, shapes));
+            self.selected_indices.clear();
+        }
     }
 
     // Supprime uniquement les éléments actuellement sélectionnés.
     pub fn delete_selected(&mut self) {
-        if self.selected_indices.is_empty() { return; }
-        let mut indexed: Vec<_> = self.selected_indices.iter()
-            .filter_map(|&i| self.lines.get(i).map(|l| (i, l.clone())))
+        if self.selected_indices.is_empty() {
+            return;
+        }
+        let mut indexed: Vec<_> = self.selected_indices
+            .iter()
+            .filter_map(|&i| {
+                self.layer_manager
+                    .get_active_layer()
+                    .and_then(|l| l.elements.get(i).map(|s| (i, s.clone())))
+            })
             .collect();
         indexed.sort_by_key(|&(i, _)| i);
         let indices = indexed.iter().map(|(i, _)| *i).collect();
-        let lines = indexed.into_iter().map(|(_, l)| l).collect();
-        self.execute(PaintAction::Delete(indices, lines));
+        let shapes = indexed.into_iter().map(|(_, s)| s).collect();
+        self.execute(PaintAction::Delete(indices, shapes));
         self.selected_indices.clear();
     }
 
@@ -40,29 +73,44 @@ impl PaintApp {
 
     // Copie les lignes sélectionnées dans le presse-papiers interne.
     pub fn copy_selected(&mut self) {
-        if self.selected_indices.is_empty() { return; }
-        self.clipboard = self.selected_indices.iter()
-            .filter_map(|&i| self.lines.get(i).cloned())
+        if self.selected_indices.is_empty() {
+            return;
+        }
+        self.clipboard = self.selected_indices
+            .iter()
+            .filter_map(|&i| {
+                self.layer_manager
+                    .get_active_layer()
+                    .and_then(|l| l.elements.get(i).cloned())
+            })
             .collect();
     }
 
     // Colle le presse-papiers en décalant les points pour éviter la superposition exacte.
     pub fn paste(&mut self) {
-        if self.clipboard.is_empty() { return; }
+        if self.clipboard.is_empty() {
+            return;
+        }
         let offset = Vec2::splat(20.0);
-        let mut new_lines = self.clipboard.clone();
-        for shape in &mut new_lines {
+        let mut new_shapes = self.clipboard.clone();
+        for shape in &mut new_shapes {
             match shape {
                 Shape::Line { points, id, .. } => {
-                    for p in points { *p += offset; }
+                    for p in points {
+                        *p += offset;
+                    }
                     *id = timestamp_id();
                 }
             }
         }
-        self.execute(PaintAction::Create(new_lines.clone()));
-        self.clipboard = new_lines; 
-        let start_idx = self.lines.len() - self.clipboard.len();
-        self.selected_indices = (start_idx..self.lines.len()).collect();
+        self.execute(PaintAction::Create(new_shapes.clone()));
+        self.clipboard = new_shapes.clone();
+        let start_idx = if let Some(layer) = self.layer_manager.get_active_layer() {
+            layer.elements.len() - self.clipboard.len()
+        } else {
+            0
+        };
+        self.selected_indices = (start_idx..start_idx + self.clipboard.len()).collect();
     }
 
     // --- SYSTÈME UNDO/REDO ---
@@ -73,62 +121,146 @@ impl PaintApp {
 
         // Toute action locale de création/suppression est propagée.
         match &action {
-            PaintAction::Create(lines) => {
-                for line in lines {
-                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+            PaintAction::Create(shapes) => {
+                for shape in shapes {
+                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
                 }
             }
-            PaintAction::Delete(_, lines) => {
-                for line in lines {
-                    self.send_network_event(NetworkEvent::DeleteLine(line.id()));
+            PaintAction::Delete(_, shapes) => {
+                for shape in shapes {
+                    self.send_network_event(NetworkEvent::DeleteLine(shape.id()));
                 }
             }
-            PaintAction::Modify(_, _, new_lines) => {
-                for line in new_lines {
-                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+            PaintAction::Modify(_, _, new_shapes) => {
+                for shape in new_shapes {
+                    self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
                 }
             }
             PaintAction::Move(indices, _) => {
-                for &idx in indices {
-                    if let Some(line) = self.lines.get(idx) {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                if let Some(layer) = self.layer_manager.get_active_layer() {
+                    for &idx in indices {
+                        if let Some(shape) = layer.elements.get(idx) {
+                            self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                        }
                     }
                 }
             }
+
+            // Actions de layers propagées
+            PaintAction::CreateLayer { id, name, .. } => {
+                self.send_network_event(NetworkEvent::CreateLayer { id: *id, name: name.clone(), position: 0 });
+            }
+            PaintAction::DeleteLayer { id, .. } => {
+                self.send_network_event(NetworkEvent::DeleteLayer { id: *id });
+            }
+            PaintAction::RenameLayer { id, new_name, .. } => {
+                self.send_network_event(NetworkEvent::RenameLayer { id: *id, name: new_name.clone() });
+            }
+            PaintAction::SetLayerVisibility { id, visible } => {
+                self.send_network_event(NetworkEvent::SetLayerVisibility { id: *id, visible: *visible });
+            }
+            PaintAction::SetActiveLayer { new_id, .. } => {
+                self.send_network_event(NetworkEvent::SetActiveLayer { id: *new_id });
+            }
+            PaintAction::ReorderLayers { from_idx, to_idx } => {
+                self.send_network_event(NetworkEvent::ReorderLayers { from_idx: *from_idx, to_idx: *to_idx });
+            }
+            // Actions réseau - ignorées dans execute (elles sont déjà appliquées)
+            PaintAction::NetworkCreateLayer { .. } | PaintAction::NetworkDeleteLayer { .. } | PaintAction::NetworkRenameLayer { .. } | PaintAction::NetworkSetLayerVisibility { .. } | PaintAction::NetworkSetActiveLayer { .. } | PaintAction::NetworkReorderLayers { .. } => {}
         }
 
-        self.undo_stack.push(action);
-        self.redo_stack.clear();
+        // Ne pousser dans l'historique que les actions locales (pas les Network*)
+        if !matches!(action, PaintAction::NetworkCreateLayer { .. } | PaintAction::NetworkDeleteLayer { .. } | PaintAction::NetworkRenameLayer { .. } | PaintAction::NetworkSetLayerVisibility { .. } | PaintAction::NetworkSetActiveLayer { .. } | PaintAction::NetworkReorderLayers { .. }) {
+            self.undo_stack.push(action.clone());
+            self.redo_stack.clear();
+        }
     }
 
     // Applique une action sans toucher à l'historique.
     pub fn apply_action(&mut self, action: &PaintAction) {
         match action {
-            PaintAction::Create(new_lines) => {
-                for l in new_lines { self.lines.push(l.clone()); }
-            },
+            PaintAction::Create(new_shapes) => {
+                if let Some(layer) = self.get_active_layer_mut() {
+                    for s in new_shapes {
+                        layer.add_element(s.clone());
+                    }
+                }
+            }
             PaintAction::Delete(indices, _) => {
-                let mut sorted = indices.clone();
-                sorted.sort_by(|a, b| b.cmp(a));
-                for idx in sorted { 
-                    if idx < self.lines.len() { self.lines.remove(idx); } 
+                if let Some(layer) = self.get_active_layer_mut() {
+                    let mut sorted = indices.clone();
+                    sorted.sort_by(|a, b| b.cmp(a));
+                    for idx in sorted {
+                        if idx < layer.elements.len() {
+                            layer.elements.remove(idx);
+                        }
+                    }
                 }
-            },
-            PaintAction::Modify(indices, _, new_lines) => {
-                for (i, &idx) in indices.iter().enumerate() {
-                    if let Some(l) = self.lines.get_mut(idx) { *l = new_lines[i].clone(); }
+            }
+            PaintAction::Modify(indices, _, new_shapes) => {
+                if let Some(layer) = self.get_active_layer_mut() {
+                    for (i, &idx) in indices.iter().enumerate() {
+                        if let Some(s) = layer.elements.get_mut(idx) {
+                            *s = new_shapes[i].clone();
+                        }
+                    }
                 }
-            },
+            }
             PaintAction::Move(indices, delta) => {
-                for &idx in indices {
-                    if let Some(shape) = self.lines.get_mut(idx) {
-                        match shape {
-                            Shape::Line { points, .. } => {
-                                for p in points { *p += *delta; }
+                if let Some(layer) = self.get_active_layer_mut() {
+                    for &idx in indices {
+                        if let Some(shape) = layer.elements.get_mut(idx) {
+                            match shape {
+                                Shape::Line { points, .. } => {
+                                    for p in points {
+                                        *p += *delta;
+                                    }
+                                }
                             }
                         }
                     }
                 }
+            }
+            PaintAction::CreateLayer { id, name, .. } => {
+                self.layer_manager.create_layer_at(*id, name.clone(), 0);
+            }
+            PaintAction::DeleteLayer {
+                id,
+                layer: _,
+                position: _,
+            } => {
+                self.layer_manager.delete_layer(*id);
+            }
+            PaintAction::RenameLayer { id, new_name, .. } => {
+                self.layer_manager.rename_layer(*id, new_name.clone());
+            }
+            PaintAction::SetLayerVisibility { id, visible } => {
+                self.layer_manager.set_layer_visibility(*id, *visible);
+            }
+            PaintAction::ReorderLayers { from_idx, to_idx } => {
+                self.layer_manager.reorder_layer(*from_idx, *to_idx);
+            }
+            PaintAction::SetActiveLayer { new_id, .. } => {
+                self.layer_manager.set_active_layer(*new_id);
+            }
+            // Actions réseau (même logique que les actions normales mais ne se propagent pas)
+            PaintAction::NetworkCreateLayer { id, name, position } => {
+                self.layer_manager.create_layer_at(*id, name.clone(), *position);
+            }
+            PaintAction::NetworkDeleteLayer { id } => {
+                self.layer_manager.delete_layer(*id);
+            }
+            PaintAction::NetworkRenameLayer { id, name } => {
+                self.layer_manager.rename_layer(*id, name.clone());
+            }
+            PaintAction::NetworkSetLayerVisibility { id, visible } => {
+                self.layer_manager.set_layer_visibility(*id, *visible);
+            }
+            PaintAction::NetworkSetActiveLayer { id } => {
+                self.layer_manager.set_active_layer(*id);
+            }
+            PaintAction::NetworkReorderLayers { from_idx, to_idx } => {
+                self.layer_manager.reorder_layer(*from_idx, *to_idx);
             }
         }
     }
@@ -137,55 +269,111 @@ impl PaintApp {
     pub fn undo(&mut self) {
         if let Some(action) = self.undo_stack.pop() {
             match &action {
-                PaintAction::Create(lines) => {
-                    // Supprimer par id (et non par pop en fin de tableau),
-                    // car des lignes distantes peuvent avoir été ajoutées après.
-                    let mut ids: Vec<u64> = lines.iter().map(|l| l.id()).collect();
+                // Actions réseau ne devraient pas être dans l'historique
+                PaintAction::NetworkCreateLayer { .. } | PaintAction::NetworkDeleteLayer { .. } | PaintAction::NetworkRenameLayer { .. } | PaintAction::NetworkSetLayerVisibility { .. } | PaintAction::NetworkSetActiveLayer { .. } | PaintAction::NetworkReorderLayers { .. } => {
+                    // Ne rien faire - ces actions ne devraient pas être dans l'historique
+                }
+                PaintAction::Create(shapes) => {
+                    // Supprimer par id
+                    let mut ids: Vec<u64> = shapes.iter().map(|s| s.id()).collect();
                     ids.sort_unstable();
                     ids.dedup();
-                    self.lines.retain(|existing| ids.binary_search(&existing.id()).is_err());
-                    // Informer les autres clients que ces lignes ont été annulées.
-                    for l in lines {
-                        self.send_network_event(NetworkEvent::DeleteLine(l.id()));
+                    if let Some(layer) = self.get_active_layer_mut() {
+                        layer.elements.retain(|existing| ids.binary_search(&existing.id()).is_err());
                     }
-                },
-                PaintAction::Delete(indices, lines) => {
-                    let mut combined: Vec<_> = indices.iter().zip(lines.iter()).collect();
+                    // Informer les autres clients que ces formes ont été annulées.
+                    for s in shapes {
+                        self.send_network_event(NetworkEvent::DeleteLine(s.id()));
+                    }
+                }
+                PaintAction::Delete(indices, shapes) => {
+                    let mut combined: Vec<_> = indices.iter().zip(shapes.iter()).collect();
                     combined.sort_by_key(|&(&idx, _)| idx);
-                    for (&idx, line) in combined { self.lines.insert(idx, line.clone()); }
-
-                    // Undo d'une suppression = recréer ces lignes sur les autres clients.
-                    for line in lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    if let Some(layer) = self.get_active_layer_mut() {
+                        for (&idx, shape) in combined {
+                            if idx <= layer.elements.len() {
+                                layer.elements.insert(idx, shape.clone());
+                            }
+                        }
                     }
-                },
-                PaintAction::Modify(indices, old_lines, _) => {
-                    for (i, &idx) in indices.iter().enumerate() {
-                        if let Some(l) = self.lines.get_mut(idx) { *l = old_lines[i].clone(); }
+
+                    // Undo d'une suppression = recréer ces formes sur les autres clients.
+                    for shape in shapes {
+                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                    }
+                }
+                PaintAction::Modify(indices, old_shapes, _) => {
+                    if let Some(layer) = self.get_active_layer_mut() {
+                        for (i, &idx) in indices.iter().enumerate() {
+                            if let Some(s) = layer.elements.get_mut(idx) {
+                                *s = old_shapes[i].clone();
+                            }
+                        }
                     }
 
                     // Undo d'une modification = repousser l'ancienne version.
-                    for line in old_lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    for shape in old_shapes {
+                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
                     }
-                },
+                }
                 PaintAction::Move(indices, delta) => {
-                    for &idx in indices {
-                        if let Some(shape) = self.lines.get_mut(idx) {
-                            match shape {
-                                Shape::Line { points, .. } => {
-                                    for p in points { *p -= *delta; }
+                    if let Some(layer) = self.get_active_layer_mut() {
+                        for &idx in indices {
+                            if let Some(shape) = layer.elements.get_mut(idx) {
+                                match shape {
+                                    Shape::Line { points, .. } => {
+                                        for p in points {
+                                            *p -= *delta;
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
                     // Undo d'un déplacement = repousser la géométrie courante restaurée.
-                    for &idx in indices {
-                        if let Some(line) = self.lines.get(idx) {
-                            self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    if let Some(layer) = self.layer_manager.get_active_layer() {
+                        for &idx in indices {
+                            if let Some(shape) = layer.elements.get(idx) {
+                                self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                            }
                         }
                     }
+                }
+                PaintAction::CreateLayer { id, old_active, .. } => {
+                    self.layer_manager.delete_layer(*id);
+                    self.layer_manager.set_active_layer(*old_active);
+                    self.send_network_event(NetworkEvent::DeleteLayer { id: *id });
+                    self.send_network_event(NetworkEvent::SetActiveLayer { id: *old_active });
+                }
+                PaintAction::DeleteLayer {
+                    id,
+                    layer,
+                    position,
+                } => {
+                    // Undo de suppression: restaurer le layer
+                    self.layer_manager.layers.insert(*position, layer.clone());
+                    self.layer_manager.active_layer_id = *id;
+                    self.send_network_event(NetworkEvent::CreateLayer { id: *id, name: layer.name.clone(), position: *position });
+                    self.send_network_event(NetworkEvent::SetActiveLayer { id: *id });
+                }
+                PaintAction::RenameLayer { id, old_name, .. } => {
+                    self.layer_manager.rename_layer(*id, old_name.clone());
+                    self.send_network_event(NetworkEvent::RenameLayer { id: *id, name: old_name.clone() });
+                }
+                PaintAction::SetLayerVisibility { id, visible } => {
+                    let new_visible = !*visible;
+                    self.layer_manager.set_layer_visibility(*id, new_visible);
+                    self.send_network_event(NetworkEvent::SetLayerVisibility { id: *id, visible: new_visible });
+                }
+                PaintAction::ReorderLayers { from_idx, to_idx } => {
+                    // Undo d'un réordonnancement: inverser l'ordre
+                    self.layer_manager.reorder_layer(*to_idx, *from_idx);
+                    self.send_network_event(NetworkEvent::ReorderLayers { from_idx: *to_idx, to_idx: *from_idx });
+                }
+                PaintAction::SetActiveLayer { old_id, .. } => {
+                    self.layer_manager.set_active_layer(*old_id);
+                    self.send_network_event(NetworkEvent::SetActiveLayer { id: *old_id });
                 }
             }
             self.redo_stack.push(action);
@@ -200,27 +388,51 @@ impl PaintApp {
 
             // Repropager l'action rejouée pour garder les autres clients synchronisés.
             match &action {
-                PaintAction::Create(lines) => {
-                    for l in lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(l)));
+                // Actions réseau ne devraient pas être dans l'historique
+                PaintAction::NetworkCreateLayer { .. } | PaintAction::NetworkDeleteLayer { .. } | PaintAction::NetworkRenameLayer { .. } | PaintAction::NetworkSetLayerVisibility { .. } | PaintAction::NetworkSetActiveLayer { .. } | PaintAction::NetworkReorderLayers { .. } => {
+                    // Ne rien faire - ces actions ne devraient pas être dans l'historique
+                }
+                PaintAction::Create(shapes) => {
+                    for s in shapes {
+                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(s)));
                     }
                 }
-                PaintAction::Delete(_, lines) => {
-                    for l in lines {
-                        self.send_network_event(NetworkEvent::DeleteLine(l.id()));
+                PaintAction::Delete(_, shapes) => {
+                    for s in shapes {
+                        self.send_network_event(NetworkEvent::DeleteLine(s.id()));
                     }
                 }
-                PaintAction::Modify(_, _, new_lines) => {
-                    for line in new_lines {
-                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                PaintAction::Modify(_, _, new_shapes) => {
+                    for shape in new_shapes {
+                        self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
                     }
                 }
                 PaintAction::Move(indices, _) => {
-                    for &idx in indices {
-                        if let Some(line) = self.lines.get(idx) {
-                            self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(line)));
+                    if let Some(layer) = self.layer_manager.get_active_layer() {
+                        for &idx in indices {
+                            if let Some(shape) = layer.elements.get(idx) {
+                                self.send_network_event(NetworkEvent::DrawLine(DrawLineEvent::from_line(shape)));
+                            }
                         }
                     }
+                }
+                PaintAction::CreateLayer { id, name, .. } => {
+                    self.send_network_event(NetworkEvent::CreateLayer { id: *id, name: name.clone(), position: 0 });
+                }
+                PaintAction::DeleteLayer { id, .. } => {
+                    self.send_network_event(NetworkEvent::DeleteLayer { id: *id });
+                }
+                PaintAction::RenameLayer { id, new_name, .. } => {
+                    self.send_network_event(NetworkEvent::RenameLayer { id: *id, name: new_name.clone() });
+                }
+                PaintAction::SetLayerVisibility { id, visible } => {
+                    self.send_network_event(NetworkEvent::SetLayerVisibility { id: *id, visible: *visible });
+                }
+                PaintAction::ReorderLayers { from_idx, to_idx } => {
+                    self.send_network_event(NetworkEvent::ReorderLayers { from_idx: *from_idx, to_idx: *to_idx });
+                }
+                PaintAction::SetActiveLayer { new_id, .. } => {
+                    self.send_network_event(NetworkEvent::SetActiveLayer { id: *new_id });
                 }
             }
 
@@ -232,16 +444,84 @@ impl PaintApp {
 
     // Calcule une boîte englobante pour tester rapidement si un tracé est cliqué/sélectionné.
     pub fn get_line_rect(&self, idx: usize) -> Rect {
-        if let Some(shape) = self.lines.get(idx) {
-            match shape {
-                Shape::Line { points, width, .. } => {
-                    let mut r = Rect::NOTHING;
-                    for p in points { r.extend_with(*p); }
-                    return r.expand(width / 2.0 + 5.0);
+        if let Some(layer) = self.layer_manager.get_active_layer() {
+            if let Some(shape) = layer.elements.get(idx) {
+                match shape {
+                    Shape::Line { points, width, .. } => {
+                        let mut r = Rect::NOTHING;
+                        for p in points {
+                            r.extend_with(*p);
+                        }
+                        return r.expand(width / 2.0 + 5.0);
+                    }
                 }
             }
         }
         Rect::NOTHING
+    }
+
+    // --- ACTIONS POUR LES LAYERS ---
+
+    pub fn create_new_layer(&mut self) {
+        let new_id = timestamp_id();
+        let count = self.layer_manager.layers.len() + 1;
+        let name = format!("Layer {}", count);
+        let old_active = self.layer_manager.active_layer_id;
+        self.execute(PaintAction::CreateLayer { id: new_id, name, old_active });
+    }
+
+    pub fn delete_layer(&mut self, layer_id: u64) -> bool {
+        if self.layer_manager.layers.len() <= 1 {
+            return false;
+        }
+        if let Some(idx) = self.layer_manager.get_layer_index(layer_id) {
+            if let Some(layer) = self.layer_manager.get_layer(layer_id) {
+                let layer_copy = layer.clone_for_undo();
+                self.execute(PaintAction::DeleteLayer {
+                    id: layer_id,
+                    layer: layer_copy,
+                    position: idx,
+                });
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn rename_layer(&mut self, layer_id: u64, new_name: String) {
+        if let Some(layer) = self.layer_manager.get_layer(layer_id) {
+            let old_name = layer.name.clone();
+            self.execute(PaintAction::RenameLayer {
+                id: layer_id,
+                old_name,
+                new_name,
+            });
+        }
+    }
+
+    pub fn toggle_layer_visibility(&mut self, layer_id: u64) {
+        if let Some(layer) = self.layer_manager.get_layer(layer_id) {
+            let new_visible = !layer.visible;
+            self.execute(PaintAction::SetLayerVisibility {
+                id: layer_id,
+                visible: new_visible,
+            });
+        }
+    }
+
+    pub fn reorder_layers(&mut self, from_idx: usize, to_idx: usize) {
+        self.execute(PaintAction::ReorderLayers { from_idx, to_idx });
+    }
+
+    pub fn set_active_layer(&mut self, layer_id: u64) {
+        let old_id = self.layer_manager.active_layer_id;
+        if old_id != layer_id {
+            self.execute(PaintAction::SetActiveLayer {
+                old_id,
+                new_id: layer_id,
+            });
+            self.selected_indices.clear();
+        }
     }
 }
 
@@ -249,7 +529,12 @@ impl PaintApp {
 // Utilisé par la gomme et la sélection pour savoir si le pointeur "touche" un trait.
 pub fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let l2 = a.distance_sq(b);
-    if l2 == 0.0 { return p.distance(a); }
+    if l2 == 0.0 {
+        return p.distance(a);
+    }
     let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
-    p.distance(Pos2::new(a.x + t.clamp(0.0, 1.0) * (b.x - a.x), a.y + t.clamp(0.0, 1.0) * (b.y - a.y)))
+    p.distance(Pos2::new(
+        a.x + t.clamp(0.0, 1.0) * (b.x - a.x),
+        a.y + t.clamp(0.0, 1.0) * (b.y - a.y),
+    ))
 }
