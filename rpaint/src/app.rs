@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, Rect, Shape, Stroke, Vec2};
-use crate::model::{PaintApp, BrushMode, PaintAction, ShapeKind};
+use crate::model::{PaintApp, BrushMode, PaintAction, ShapeKind, SelectionMode};
 use crate::model::Shape as PaintShape;
-use crate::ui_tools::{draw_dashed_rect, draw_ellipse, draw_regular_polygon, draw_star, draw_arrow};
+use crate::ui_tools::{draw_dashed_rect, draw_ellipse, draw_regular_polygon, draw_star, draw_arrow, draw_lasso, is_shape_in_lasso};
 use crate::server;
 use crate::client;
 use crate::events::{DrawShapeEvent, NetworkEvent};
@@ -217,7 +217,15 @@ impl eframe::App for PaintApp {
                 }
             });
             ui.selectable_value(&mut self.mode, BrushMode::Eraser, "🧽 Gomme");
-            ui.selectable_value(&mut self.mode, BrushMode::Select, "🖱 Sélection");
+            ui.selectable_value(&mut self.mode, BrushMode::Select, format!("🖱 Sélection: {}", self.selection_mode.label()));
+            ui.menu_button("Changer mode sélection", |ui| {
+                if ui.selectable_value(&mut self.selection_mode, SelectionMode::Rectangle, "Rectangle").clicked() {
+                    self.mode = BrushMode::Select;
+                }
+                if ui.selectable_value(&mut self.selection_mode, SelectionMode::Lasso, "Lasso").clicked() {
+                    self.mode = BrushMode::Select;
+                }
+            });
 
             ui.separator();
             ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0).text("Taille"));
@@ -712,68 +720,146 @@ impl eframe::App for PaintApp {
                         }
                     },
                     BrushMode::Select => {
-                        if response.drag_started() {
-                            let mut hit = self.selected_indices.iter().find(|&&i| self.get_shape_rect(i).contains(pos)).cloned();
-                            if hit.is_none() {
-                                if let Some(layer) = self.layer_manager.get_active_layer() {
-                                    hit = layer.elements.iter().enumerate().find(|(_, l)| 
-                                        l.distance_to(pos) < 10.0
-                                    ).map(|(i, _)| i);
+                        match self.selection_mode {
+                            SelectionMode::Rectangle => {
+                                // Ancienne logique : rectangle de sélection
+                                if response.drag_started() {
+                                    let mut hit = self.selected_indices.iter().find(|&&i| self.get_shape_rect(i).contains(pos)).cloned();
+                                    if hit.is_none() {
+                                        if let Some(layer) = self.layer_manager.get_active_layer() {
+                                            hit = layer.elements.iter().enumerate().find(|(_, l)| 
+                                                l.distance_to(pos) < 10.0
+                                            ).map(|(i, _)| i);
+                                        }
+                                    }
+                                    if let Some(idx) = hit {
+                                        if !self.selected_indices.contains(&idx) { self.selected_indices = vec![idx]; }
+                                        self.is_dragging_items = true;
+                                        self.drag_accumulated_delta = Vec2::ZERO;
+                                    } else {
+                                        self.selection_start_pos = Some(pos);
+                                        self.selected_indices.clear();
+                                        self.current_lasso.clear();
+                                    }
                                 }
-                            }
-                            if let Some(idx) = hit {
-                                if !self.selected_indices.contains(&idx) { self.selected_indices = vec![idx]; }
-                                self.is_dragging_items = true;
-                                self.drag_accumulated_delta = Vec2::ZERO;
-                            } else {
-                                self.selection_start_pos = Some(pos);
-                                self.selected_indices.clear();
-                            }
-                        }
-                        if response.dragged() {
-                            if self.is_dragging_items {
-                                let delta = response.drag_delta();
-                                self.drag_accumulated_delta += delta;
-                                if let Some(layer) = self.layer_manager.get_active_layer_mut() {
-                                    for &idx in &self.selected_indices {
-                                        if let Some(shape) = layer.elements.get_mut(idx) {
-                                            shape.translate(delta);
-                                            // Envoyer la position mise à jour en temps réel.
-                                            let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape));
-                                            if self.server_running {
-                                                let _ = server::publish_network_event(ev);
-                                            } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
-                                                let _ = tx.send(ev);
+                                if response.dragged() {
+                                    if self.is_dragging_items {
+                                        let delta = response.drag_delta();
+                                        self.drag_accumulated_delta += delta;
+                                        if let Some(layer) = self.layer_manager.get_active_layer_mut() {
+                                            for &idx in &self.selected_indices {
+                                                if let Some(shape) = layer.elements.get_mut(idx) {
+                                                    shape.translate(delta);
+                                                    let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape));
+                                                    if self.server_running {
+                                                        let _ = server::publish_network_event(ev);
+                                                    } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
+                                                        let _ = tx.send(ev);
+                                                    }
+                                                }
                                             }
+                                        }
+                                    } else if let Some(start) = self.selection_start_pos {
+                                        self.selection_rect = Some(Rect::from_two_pos(start, pos));
+                                    }
+                                }
+                                if response.drag_released() {
+                                    if self.is_dragging_items {
+                                        let total = self.drag_accumulated_delta;
+                                        if total.length_sq() > 0.0 {
+                                            if let Some(layer) = self.layer_manager.get_active_layer_mut() {
+                                                for &idx in &self.selected_indices {
+                                                    if let Some(shape) = layer.elements.get_mut(idx) {
+                                                        shape.translate(-total);
+                                                    }
+                                                }
+                                            }
+                                            self.execute(PaintAction::Move(self.selected_indices.clone(), total));
+                                        }
+                                        self.is_dragging_items = false;
+                                    } else if let Some(rect) = self.selection_rect.take() {
+                                        if let Some(layer) = self.layer_manager.get_active_layer() {
+                                            self.selected_indices = layer.elements.iter().enumerate()
+                                                .filter(|(_, l)| l.bounding_rect().intersects(rect))
+                                                .map(|(i, _)| i).collect();
+                                        }
+                                        self.selection_start_pos = None;
+                                    }
+                                }
+                            },
+                            SelectionMode::Lasso => {
+                                // Nouveau mode : sélection par lasso (freehand)
+                                if response.drag_started() {
+                                    let mut hit = self.selected_indices.iter().find(|&&i| self.get_shape_rect(i).contains(pos)).cloned();
+                                    if hit.is_none() {
+                                        if let Some(layer) = self.layer_manager.get_active_layer() {
+                                            hit = layer.elements.iter().enumerate().find(|(_, l)| 
+                                                l.distance_to(pos) < 10.0
+                                            ).map(|(i, _)| i);
+                                        }
+                                    }
+                                    if let Some(idx) = hit {
+                                        if !self.selected_indices.contains(&idx) { self.selected_indices = vec![idx]; }
+                                        self.is_dragging_items = true;
+                                        self.drag_accumulated_delta = Vec2::ZERO;
+                                    } else {
+                                        self.selected_indices.clear();
+                                        self.current_lasso.clear();
+                                        self.current_lasso.push(pos);
+                                        self.selection_start_pos = Some(pos);
+                                    }
+                                }
+                                if response.dragged() {
+                                    if self.is_dragging_items {
+                                        let delta = response.drag_delta();
+                                        self.drag_accumulated_delta += delta;
+                                        if let Some(layer) = self.layer_manager.get_active_layer_mut() {
+                                            for &idx in &self.selected_indices {
+                                                if let Some(shape) = layer.elements.get_mut(idx) {
+                                                    shape.translate(delta);
+                                                    let ev = NetworkEvent::DrawShape(DrawShapeEvent::from_shape(shape));
+                                                    if self.server_running {
+                                                        let _ = server::publish_network_event(ev);
+                                                    } else if let Some(tx) = self.outgoing_draw_tx.as_ref() {
+                                                        let _ = tx.send(ev);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else if !self.current_lasso.is_empty() {
+                                        let should_add = self.current_lasso
+                                            .last()
+                                            .map(|p| p.distance_sq(pos) > 0.5)
+                                            .unwrap_or(true);
+                                        if should_add {
+                                            self.current_lasso.push(pos);
                                         }
                                     }
                                 }
-                            } else if let Some(start) = self.selection_start_pos {
-                                self.selection_rect = Some(Rect::from_two_pos(start, pos));
-                            }
-                        }
-                        if response.drag_released() {
-                            if self.is_dragging_items {
-                                let total = self.drag_accumulated_delta;
-                                if total.length_sq() > 0.0 {
-                                    // Annulation temporaire pour enregistrer le mouvement propre dans l'undo
-                                    if let Some(layer) = self.layer_manager.get_active_layer_mut() {
-                                        for &idx in &self.selected_indices {
-                                            if let Some(shape) = layer.elements.get_mut(idx) {
-                                                shape.translate(-total);
+                                if response.drag_released() {
+                                    if self.is_dragging_items {
+                                        let total = self.drag_accumulated_delta;
+                                        if total.length_sq() > 0.0 {
+                                            if let Some(layer) = self.layer_manager.get_active_layer_mut() {
+                                                for &idx in &self.selected_indices {
+                                                    if let Some(shape) = layer.elements.get_mut(idx) {
+                                                        shape.translate(-total);
+                                                    }
+                                                }
                                             }
+                                            self.execute(PaintAction::Move(self.selected_indices.clone(), total));
                                         }
+                                        self.is_dragging_items = false;
+                                    } else if !self.current_lasso.is_empty() {
+                                        if let Some(layer) = self.layer_manager.get_active_layer() {
+                                            self.selected_indices = layer.elements.iter().enumerate()
+                                                .filter(|(_, l)| is_shape_in_lasso(l, &self.current_lasso))
+                                                .map(|(i, _)| i).collect();
+                                        }
+                                        self.current_lasso.clear();
+                                        self.selection_start_pos = None;
                                     }
-                                    self.execute(PaintAction::Move(self.selected_indices.clone(), total));
                                 }
-                                self.is_dragging_items = false;
-                            } else if let Some(rect) = self.selection_rect.take() {
-                                if let Some(layer) = self.layer_manager.get_active_layer() {
-                                    self.selected_indices = layer.elements.iter().enumerate()
-                                        .filter(|(_, l)| l.bounding_rect().intersects(rect))
-                                        .map(|(i, _)| i).collect();
-                                }
-                                self.selection_start_pos = None;
                             }
                         }
                     }
@@ -819,10 +905,14 @@ impl eframe::App for PaintApp {
                 }
             }
 
-            // Dessiner le rectangle de sélection bleu transparent
-            if let Some(r) = self.selection_rect {
-                painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(100, 150, 255, 30));
-                painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)));
+            // Dessiner le rectangle de sélection ou le lasso
+            if self.selection_mode == SelectionMode::Rectangle {
+                if let Some(r) = self.selection_rect {
+                    painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(100, 150, 255, 30));
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)));
+                }
+            } else if self.selection_mode == SelectionMode::Lasso && !self.current_lasso.is_empty() {
+                draw_lasso(&painter, &self.current_lasso);
             }
 
             // Dessiner la forme en cours de tracé

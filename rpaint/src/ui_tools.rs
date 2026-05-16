@@ -85,3 +85,65 @@ pub fn draw_arrow(painter: &Painter, start: Pos2, end: Pos2, stroke: Stroke) {
     painter.line_segment([end, left], stroke);
     painter.line_segment([end, right], stroke);
 }
+
+// Dessine un lasso (polygone freehand) en pointillés.
+pub fn draw_lasso(painter: &Painter, points: &[Pos2]) {
+    if points.len() < 2 { return; }
+    let stroke = Stroke::new(2.0, eframe::egui::Color32::from_rgb(100, 150, 255));
+    let dash_len = 6.0;
+    let gap_len = 4.0;
+    
+    // Parcourir les segments du lasso
+    for w in points.windows(2) {
+        let (start, end) = (w[0], w[1]);
+        let full_vec = end - start;
+        let len = full_vec.length();
+        if len == 0.0 { continue; }
+        let dir = full_vec / len;
+        let mut d = 0.0;
+        while d < len {
+            painter.line_segment([start + dir * d, start + dir * (d + dash_len).min(len)], stroke);
+            d += dash_len + gap_len;
+        }
+    }
+}
+
+// Détermine si une forme (par sa boîte englobante) est à l'intérieur du lasso.
+// Utilise l'algorithme ray casting (rayon vers la droite).
+pub fn is_shape_in_lasso(shape: &crate::model::Shape, lasso: &[Pos2]) -> bool {
+    if lasso.len() < 3 { return false; }
+    
+    // Vérifier si au moins 3 coins de la boîte englobante sont à l'intérieur du lasso
+    let bbox = shape.bounding_rect();
+    let corners = [
+        bbox.left_top(),
+        bbox.right_top(),
+        bbox.right_bottom(),
+        bbox.left_bottom(),
+    ];
+    
+    let inside_count = corners.iter().filter(|&&p| is_point_in_polygon(p, lasso)).count();
+    inside_count >= 3
+}
+
+// Algorithme ray casting pour déterminer si un point est à l'intérieur d'un polygone.
+fn is_point_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
+    if polygon.len() < 3 { return false; }
+    
+    let mut inside = false;
+    let mut j = polygon.len() - 1;
+    
+    for i in 0..polygon.len() {
+        let xi = polygon[i].x;
+        let yi = polygon[i].y;
+        let xj = polygon[j].x;
+        let yj = polygon[j].y;
+        
+        if ((yi > p.y) != (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    
+    inside
+}
