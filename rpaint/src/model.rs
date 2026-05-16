@@ -8,6 +8,19 @@ use crate::layers::{Layer, LayerManager};
 #[derive(Clone, PartialEq)]
 pub enum BrushMode { Freehand, Shape, Eraser, Select }
 
+// Mode de sélection : rectangle ou lasso (freehand).
+#[derive(Clone, Copy, PartialEq)]
+pub enum SelectionMode { Rectangle, Lasso }
+
+impl SelectionMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SelectionMode::Rectangle => "Rectangle",
+            SelectionMode::Lasso => "Lasso",
+        }
+    }
+}
+
 // Forme sélectionnée dans le menu des formes.
 #[derive(Clone, Copy, PartialEq)]
 pub enum ShapeKind {
@@ -277,6 +290,8 @@ pub struct PaintApp {
     pub selected_indices: Vec<usize>,
     pub selection_start_pos: Option<Pos2>,
     pub selection_rect: Option<Rect>,
+    pub selection_mode: SelectionMode,
+    pub current_lasso: Vec<Pos2>,
     pub clipboard: Vec<Shape>,
     pub is_dragging_items: bool,
     pub drag_accumulated_delta: Vec2,
@@ -318,6 +333,8 @@ impl Default for PaintApp {
             selected_indices: Vec::new(),
             selection_start_pos: None,
             selection_rect: None,
+            selection_mode: SelectionMode::Rectangle,
+            current_lasso: Vec::new(),
             clipboard: Vec::new(),
             is_dragging_items: false,
             drag_accumulated_delta: Vec2::ZERO,
