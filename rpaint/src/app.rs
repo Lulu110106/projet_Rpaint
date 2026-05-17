@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, Rect, Shape, Stroke, Vec2};
-use crate::model::{PaintApp, BrushMode, PaintAction, ShapeKind, SelectionMode};
+use crate::model::{Camera, PaintApp, BrushMode, PaintAction, ShapeKind, SelectionMode};
 use crate::model::Shape as PaintShape;
 use crate::ui_tools::{draw_dashed_rect, draw_ellipse, draw_regular_polygon, draw_star, draw_arrow, draw_lasso, is_shape_in_lasso};
 use crate::server;
@@ -229,6 +229,18 @@ impl eframe::App for PaintApp {
 
             ui.separator();
             ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0).text("Taille"));
+            ui.horizontal(|ui| {
+                if ui.button("➖").clicked() {
+                    self.camera.zoom_at(1.0 / 1.2, ui.min_rect().center());
+                }
+                ui.label(format!("Zoom: {}%", (self.camera.zoom * 100.0).round()));
+                if ui.button("➕").clicked() {
+                    self.camera.zoom_at(1.2, ui.min_rect().center());
+                }
+                if ui.button("🔄").on_hover_text("Réinitialiser zoom").clicked() {
+                    self.camera = Camera::new();
+                }
+            });
             let palette = [
                 egui::Color32::RED,
                 egui::Color32::from_rgb(255, 165, 0), // orange
@@ -539,9 +551,32 @@ impl eframe::App for PaintApp {
             let available_size = ui.available_size();
             let drawing_size = egui::vec2(available_size.x, available_size.y);
             let (response, painter) = ui.allocate_painter(drawing_size, egui::Sense::click_and_drag());
+            let canvas_rect = response.rect;
+            let to_world = |camera: &Camera, p: egui::Pos2| camera.to_world(egui::Pos2::new(p.x - canvas_rect.min.x, p.y - canvas_rect.min.y));
+            let to_screen = |camera: &Camera, p: egui::Pos2| canvas_rect.min + camera.to_screen(p).to_vec2();
+            let delta_to_world = |d: egui::Vec2, zoom: f32| d / zoom;
+            let rect_to_screen = |camera: &Camera, r: egui::Rect| Rect::from_two_pos(to_screen(camera, r.min), to_screen(camera, r.max));
             let pointer = response.interact_pointer_pos();
 
-            if let Some(pos) = pointer {
+            if response.hovered() {
+                let scroll = ctx.input(|i| i.scroll_delta.y);
+                if scroll != 0.0 {
+                    let factor = 1.15_f32.powf(scroll.signum());
+                    if let Some(cursor) = response.hover_pos() {
+                        self.camera.zoom_at(
+                            factor,
+                            egui::Pos2::new(cursor.x - canvas_rect.min.x, cursor.y - canvas_rect.min.y),
+                        );
+                    }
+                }
+            }
+
+            if response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary) {
+                self.camera.offset += response.drag_delta();
+            }
+
+            if let Some(screen_pos) = pointer {
+                let pos = to_world(&self.camera, screen_pos);
                 match self.mode {
                     BrushMode::Freehand | BrushMode::Shape => {
                         if response.dragged() {
@@ -744,7 +779,7 @@ impl eframe::App for PaintApp {
                                 }
                                 if response.dragged() {
                                     if self.is_dragging_items {
-                                        let delta = response.drag_delta();
+                                        let delta = delta_to_world(response.drag_delta(), self.camera.zoom);
                                         self.drag_accumulated_delta += delta;
                                         if let Some(layer) = self.layer_manager.get_active_layer_mut() {
                                             for &idx in &self.selected_indices {
@@ -811,7 +846,7 @@ impl eframe::App for PaintApp {
                                 }
                                 if response.dragged() {
                                     if self.is_dragging_items {
-                                        let delta = response.drag_delta();
+                                        let delta = delta_to_world(response.drag_delta(), self.camera.zoom);
                                         self.drag_accumulated_delta += delta;
                                         if let Some(layer) = self.layer_manager.get_active_layer_mut() {
                                             for &idx in &self.selected_indices {
@@ -872,23 +907,24 @@ impl eframe::App for PaintApp {
             for shape in self.get_visible_elements().iter() {
                 match shape {
                     PaintShape::Line { points, width, color, .. } => {
-                        painter.add(egui::Shape::line(points.clone(), Stroke::new(*width, *color)));
+                        let scaled_points: Vec<egui::Pos2> = points.iter().map(|p| to_screen(&self.camera, *p)).collect();
+                        painter.add(egui::Shape::line(scaled_points, Stroke::new(*width * self.camera.zoom, *color)));
                     }
                     PaintShape::Rectangle { start, end, width, color, .. } => {
-                        painter.rect_stroke(Rect::from_two_pos(*start, *end), 0.0, Stroke::new(*width, *color));
+                        painter.rect_stroke(Rect::from_two_pos(to_screen(&self.camera, *start), to_screen(&self.camera, *end)), 0.0, Stroke::new(*width * self.camera.zoom, *color));
                     }
                     PaintShape::Oval { start, end, width, color, .. } => {
-                        let rect = Rect::from_two_pos(*start, *end);
-                        draw_ellipse(&painter, rect, Stroke::new(*width, *color));
+                        let rect = Rect::from_two_pos(to_screen(&self.camera, *start), to_screen(&self.camera, *end));
+                        draw_ellipse(&painter, rect, Stroke::new(*width * self.camera.zoom, *color));
                     }
                     PaintShape::RegularPolygon { start, end, sides, width, color, .. } => {
-                        draw_regular_polygon(&painter, Rect::from_two_pos(*start, *end), *sides as usize, Stroke::new(*width, *color));
+                        draw_regular_polygon(&painter, Rect::from_two_pos(to_screen(&self.camera, *start), to_screen(&self.camera, *end)), *sides as usize, Stroke::new(*width * self.camera.zoom, *color));
                     }
                     PaintShape::Star { start, end, points, width, color, .. } => {
-                        draw_star(&painter, Rect::from_two_pos(*start, *end), *points as usize, Stroke::new(*width, *color));
+                        draw_star(&painter, Rect::from_two_pos(to_screen(&self.camera, *start), to_screen(&self.camera, *end)), *points as usize, Stroke::new(*width * self.camera.zoom, *color));
                     }
                     PaintShape::Arrow { start, end, width, color, .. } => {
-                        draw_arrow(&painter, *start, *end, Stroke::new(*width, *color));
+                        draw_arrow(&painter, to_screen(&self.camera, *start), to_screen(&self.camera, *end), Stroke::new(*width * self.camera.zoom, *color));
                     }
                 }
             }
@@ -898,8 +934,8 @@ impl eframe::App for PaintApp {
                     for &idx in &self.selected_indices {
                         if let Some(shape) = layer.elements.get(idx) {
                             let r = shape.bounding_rect();
-                            draw_dashed_rect(&painter, r, Color32::WHITE);
-                            draw_dashed_rect(&painter, r.expand(1.0), Color32::BLACK);
+                            draw_dashed_rect(&painter, rect_to_screen(&self.camera, r), Color32::WHITE);
+                            draw_dashed_rect(&painter, rect_to_screen(&self.camera, r.expand(1.0)), Color32::BLACK);
                         }
                     }
                 }
@@ -908,50 +944,54 @@ impl eframe::App for PaintApp {
             // Dessiner le rectangle de sélection ou le lasso
             if self.selection_mode == SelectionMode::Rectangle {
                 if let Some(r) = self.selection_rect {
-                    painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(100, 150, 255, 30));
-                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)));
+                    let r_screen = rect_to_screen(&self.camera, r);
+                    painter.rect_filled(r_screen, 0.0, Color32::from_rgba_unmultiplied(100, 150, 255, 30));
+                    painter.rect_stroke(r_screen, 0.0, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)));
                 }
             } else if self.selection_mode == SelectionMode::Lasso && !self.current_lasso.is_empty() {
-                draw_lasso(&painter, &self.current_lasso);
+                let screen_lasso: Vec<egui::Pos2> = self.current_lasso.iter().map(|p| to_screen(&self.camera, *p)).collect();
+                draw_lasso(&painter, &screen_lasso);
             }
 
             // Dessiner la forme en cours de tracé
             if !self.current_line.is_empty() {
                 if self.mode == BrushMode::Shape {
-                    let start = self.current_line[0];
-                    let end = self.current_line[1];
+                    let start = to_screen(&self.camera, self.current_line[0]);
+                    let end = to_screen(&self.camera, self.current_line[1]);
                     match self.selected_shape {
                         ShapeKind::Line => {
-                            painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                            let preview_points: Vec<egui::Pos2> = self.current_line.iter().map(|p| to_screen(&self.camera, *p)).collect();
+                            painter.add(Shape::line(preview_points, Stroke::new(self.brush_size * self.camera.zoom, self.brush_color)));
                         }
                         ShapeKind::Rectangle => {
-                            painter.rect_stroke(Rect::from_two_pos(start, end), 0.0, Stroke::new(self.brush_size, self.brush_color));
+                            painter.rect_stroke(Rect::from_two_pos(start, end), 0.0, Stroke::new(self.brush_size * self.camera.zoom, self.brush_color));
                         }
                         ShapeKind::Oval => {
-                            draw_ellipse(&painter, Rect::from_two_pos(start, end), Stroke::new(self.brush_size, self.brush_color));
+                            draw_ellipse(&painter, Rect::from_two_pos(start, end), Stroke::new(self.brush_size * self.camera.zoom, self.brush_color));
                         }
                         ShapeKind::Triangle
                         | ShapeKind::Pentagon
                         | ShapeKind::Hexagon
                         | ShapeKind::Octagon => {
-                            draw_regular_polygon(&painter, Rect::from_two_pos(start, end), self.selected_shape.sides() as usize, Stroke::new(self.brush_size, self.brush_color));
+                            draw_regular_polygon(&painter, Rect::from_two_pos(start, end), self.selected_shape.sides() as usize, Stroke::new(self.brush_size * self.camera.zoom, self.brush_color));
                         }
                         ShapeKind::Star => {
-                            draw_star(&painter, Rect::from_two_pos(start, end), 5, Stroke::new(self.brush_size, self.brush_color));
+                            draw_star(&painter, Rect::from_two_pos(start, end), 5, Stroke::new(self.brush_size * self.camera.zoom, self.brush_color));
                         }
                         ShapeKind::Arrow => {
-                            draw_arrow(&painter, start, end, Stroke::new(self.brush_size, self.brush_color));
+                            draw_arrow(&painter, start, end, Stroke::new(self.brush_size * self.camera.zoom, self.brush_color));
                         }
                     }
                 } else {
-                    painter.add(Shape::line(self.current_line.clone(), Stroke::new(self.brush_size, self.brush_color)));
+                    let preview_points: Vec<egui::Pos2> = self.current_line.iter().map(|p| to_screen(&self.camera, *p)).collect();
+                    painter.add(Shape::line(preview_points, Stroke::new(self.brush_size * self.camera.zoom, self.brush_color)));
                 }
             }
 
             // Dessiner le curseur de la gomme
             if self.mode == BrushMode::Eraser {
                 if let Some(p) = ctx.pointer_latest_pos() {
-                    painter.circle_stroke(p, self.brush_size, Stroke::new(1.0, Color32::LIGHT_RED));
+                    painter.circle_stroke(p, self.brush_size * self.camera.zoom, Stroke::new(1.0, Color32::LIGHT_RED));
                 }
             }
         });

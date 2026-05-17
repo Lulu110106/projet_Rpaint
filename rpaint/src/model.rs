@@ -21,6 +21,31 @@ impl SelectionMode {
     }
 }
 
+pub struct Camera {
+    pub zoom: f32,
+    pub offset: Vec2,
+}
+
+impl Camera {
+    pub fn new() -> Self {
+        Self { zoom: 1.0, offset: Vec2::ZERO }
+    }
+
+    pub fn to_screen(&self, p: Pos2) -> Pos2 {
+        Pos2::new(p.x * self.zoom + self.offset.x, p.y * self.zoom + self.offset.y)
+    }
+
+    pub fn to_world(&self, p: Pos2) -> Pos2 {
+        Pos2::new((p.x - self.offset.x) / self.zoom, (p.y - self.offset.y) / self.zoom)
+    }
+
+    pub fn zoom_at(&mut self, factor: f32, pivot: Pos2) {
+        self.offset.x = pivot.x - (pivot.x - self.offset.x) * factor;
+        self.offset.y = pivot.y - (pivot.y - self.offset.y) * factor;
+        self.zoom = (self.zoom * factor).clamp(0.1, 20.0);
+    }
+}
+
 // Forme sélectionnée dans le menu des formes.
 #[derive(Clone, Copy, PartialEq)]
 pub enum ShapeKind {
@@ -292,6 +317,7 @@ pub struct PaintApp {
     pub selection_rect: Option<Rect>,
     pub selection_mode: SelectionMode,
     pub current_lasso: Vec<Pos2>,
+    pub camera: Camera,
     pub clipboard: Vec<Shape>,
     pub is_dragging_items: bool,
     pub drag_accumulated_delta: Vec2,
@@ -335,6 +361,7 @@ impl Default for PaintApp {
             selection_rect: None,
             selection_mode: SelectionMode::Rectangle,
             current_lasso: Vec::new(),
+            camera: Camera::new(),
             clipboard: Vec::new(),
             is_dragging_items: false,
             drag_accumulated_delta: Vec2::ZERO,
