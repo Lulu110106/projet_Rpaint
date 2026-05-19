@@ -2,6 +2,10 @@ use crate::model::*;
 use crate::events::{DrawShapeEvent, NetworkEvent};
 use crate::server;
 use eframe::egui::{Rect, Vec2};
+use std::path::{Path, PathBuf};
+use std::fs::{File, create_dir_all};
+use std::io::BufReader;
+use image::{RgbaImage, Rgba};
 
 impl PaintApp {
     fn send_network_event(&self, event: NetworkEvent) {
@@ -75,6 +79,233 @@ impl PaintApp {
                     .and_then(|l| l.elements.get(i).cloned())
             })
             .collect();
+    }
+
+    pub fn save_project(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        let project = PaintProject {
+            layer_manager: (&self.layer_manager).into(),
+        };
+        let file = File::create(&path).map_err(|e| e.to_string())?;
+        serde_json::to_writer_pretty(file, &project).map_err(|e| e.to_string())?;
+        self.save_load_status = format!("Sauvegardé dans {}", path.as_ref().display());
+        Ok(())
+    }
+
+    pub fn load_project(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        let file = File::open(&path).map_err(|e| e.to_string())?;
+        let reader = BufReader::new(file);
+        let project: PaintProject = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
+        self.layer_manager = project.layer_manager.into();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.selected_indices.clear();
+        self.current_line.clear();
+        self.active_stroke_id = None;
+        self.selection_start_pos = None;
+        self.selection_rect = None;
+        self.current_lasso.clear();
+        self.save_load_status = format!("Chargé depuis {}", path.as_ref().display());
+        Ok(())
+    }
+
+    /// Export the currently visible canvas to a PNG file inside `saves/` (if no folder provided).
+    pub fn export_png(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        // Resolve output path into saves/ when no parent provided
+        let mut out = PathBuf::from(path.as_ref());
+        if out.parent().is_none() || out.parent() == Some(std::path::Path::new(".")) {
+            out = PathBuf::from("saves").join(out);
+        }
+        if out.extension().is_none() {
+            out.set_extension("png");
+        }
+
+        if let Some(parent) = out.parent() {
+            create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        // Determine bounds of visible elements
+        let elements = self.get_visible_elements();
+        let mut bounds = eframe::egui::Rect::NOTHING;
+        for s in &elements {
+            let r = s.bounding_rect();
+            bounds = bounds.union(r);
+        }
+
+        let padding = 8.0;
+        let (width_px, height_px, scale, origin) = if bounds.is_finite() && bounds.width() > 0.0 && bounds.height() > 0.0 {
+            // Target width for export; clamp to reasonable size
+            let target_w = 1920.0;
+            let scale = target_w / bounds.width();
+            let w = (bounds.width() * scale).ceil() as u32 + (padding as u32) * 2;
+            let h = (bounds.height() * scale).ceil() as u32 + (padding as u32) * 2;
+            (w, h, scale, bounds.min)
+        } else {
+            // Empty canvas -> default size
+            (1280u32, 720u32, 1.0f32, eframe::egui::Pos2::new(0.0, 0.0))
+        };
+
+        let mut img: RgbaImage = RgbaImage::from_pixel(width_px, height_px, Rgba([255, 255, 255, 255]));
+
+        // helper to convert Color32 to rgba
+        let color32_to_rgba = |c: eframe::egui::Color32| -> [u8;4] { [c.r(), c.g(), c.b(), c.a()] };
+
+        // simple pixel blend (src over dst)
+        let blend_pixel = |dst: &mut [u8;4], src: [u8;4]| {
+            let sa = src[3] as f32 / 255.0;
+            for i in 0..3 {
+                let sc = src[i] as f32;
+                let dc = dst[i] as f32;
+                let out = (sc * sa + dc * (1.0 - sa)).round() as u8;
+                dst[i] = out;
+            }
+            // alpha set to opaque
+            dst[3] = 255;
+        };
+
+        // draw a filled circle (used to approximate stroked lines)
+        let draw_circle = |img: &mut RgbaImage, cx: i32, cy: i32, radius: f32, color: [u8;4]| {
+            let r = radius.ceil() as i32;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let x = cx + dx;
+                    let y = cy + dy;
+                    let dist = ((dx*dx + dy*dy) as f32).sqrt();
+                    if dist <= radius {
+                        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() {
+                            let px = img.get_pixel_mut(x as u32, y as u32);
+                            let mut d = [px[0], px[1], px[2], px[3]];
+                            blend_pixel(&mut d, color);
+                            *px = Rgba(d);
+                        }
+                    }
+                }
+            }
+        };
+
+        // draw a stroked segment by sampling points along the line and placing circles
+        let draw_segment = |img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, stroke: f32, color: [u8;4]| {
+            let dx = x1 - x0;
+            let dy = y1 - y0;
+            let dist = (dx*dx + dy*dy).sqrt();
+            if dist == 0.0 {
+                draw_circle(img, x0.round() as i32, y0.round() as i32, stroke/2.0, color);
+                return;
+            }
+            let steps = (dist.max(1.0) * 2.0).ceil() as usize;
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let x = x0 + dx * t;
+                let y = y0 + dy * t;
+                draw_circle(img, x.round() as i32, y.round() as i32, stroke/2.0, color);
+            }
+        };
+
+        // Render each visible shape
+        for shape in elements {
+            match shape {
+                Shape::Line { points, color, width, .. } => {
+                    if points.len() >= 1 {
+                        let rgba = color32_to_rgba(*color);
+                        let mut last = None;
+                        for p in points {
+                            let px = ((p.x - origin.x) * scale + padding) as f32;
+                            let py = ((p.y - origin.y) * scale + padding) as f32;
+                            if let Some((lx, ly)) = last {
+                                draw_segment(&mut img, lx, ly, px, py, *width * scale, rgba);
+                            } else {
+                                draw_circle(&mut img, px.round() as i32, py.round() as i32, *width * scale / 2.0, rgba);
+                            }
+                            last = Some((px, py));
+                        }
+                    }
+                }
+                Shape::Rectangle { start, end, color, width, .. } => {
+                    let rgba = color32_to_rgba(*color);
+                    let a = (((start.x - origin.x) * scale + padding) as f32, ((start.y - origin.y) * scale + padding) as f32);
+                    let b = (((end.x - origin.x) * scale + padding) as f32, ((end.y - origin.y) * scale + padding) as f32);
+                    // four edges
+                    draw_segment(&mut img, a.0, a.1, b.0, a.1, *width * scale, rgba);
+                    draw_segment(&mut img, b.0, a.1, b.0, b.1, *width * scale, rgba);
+                    draw_segment(&mut img, b.0, b.1, a.0, b.1, *width * scale, rgba);
+                    draw_segment(&mut img, a.0, b.1, a.0, a.1, *width * scale, rgba);
+                }
+                Shape::Oval { start, end, color, width, .. } => {
+                    let rgba = color32_to_rgba(*color);
+                    let cx = (start.x + end.x) / 2.0;
+                    let cy = (start.y + end.y) / 2.0;
+                    let rx = (end.x - start.x).abs() / 2.0;
+                    let ry = (end.y - start.y).abs() / 2.0;
+                    let steps = 180;
+                    let mut prev = None;
+                    for i in 0..=steps {
+                        let ang = (i as f32) / (steps as f32) * std::f32::consts::TAU;
+                        let x = cx + rx * ang.cos();
+                        let y = cy + ry * ang.sin();
+                        let px = (x - origin.x) * scale + padding;
+                        let py = (y - origin.y) * scale + padding;
+                        if let Some((lx, ly)) = prev {
+                            draw_segment(&mut img, lx, ly, px, py, *width * scale, rgba);
+                        }
+                        prev = Some((px, py));
+                    }
+                }
+                Shape::RegularPolygon { start, end, sides, color, width, .. } => {
+                    let rgba = color32_to_rgba(*color);
+                    let rect = eframe::egui::Rect::from_two_pos(*start, *end);
+                    let cx = rect.center().x;
+                    let cy = rect.center().y;
+                    let a = rect.width() / 2.0;
+                    let b = rect.height() / 2.0;
+                    let total = *sides as usize;
+                    let mut pts = Vec::new();
+                    for i in 0..total {
+                        let ang = i as f32 * std::f32::consts::TAU / total as f32 - std::f32::consts::FRAC_PI_2;
+                        let x = cx + a * ang.cos();
+                        let y = cy + b * ang.sin();
+                        pts.push(((x - origin.x) * scale + padding, (y - origin.y) * scale + padding));
+                    }
+                    for w in pts.windows(2) {
+                        draw_segment(&mut img, w[0].0, w[0].1, w[1].0, w[1].1, *width * scale, rgba);
+                    }
+                    if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+                        draw_segment(&mut img, first.0, first.1, last.0, last.1, *width * scale, rgba);
+                    }
+                }
+                Shape::Star { start, end, points, color, width, .. } => {
+                    let rgba = color32_to_rgba(*color);
+                    let rect = eframe::egui::Rect::from_two_pos(*start, *end);
+                    let cx = rect.center().x;
+                    let cy = rect.center().y;
+                    let outer = rect.width().min(rect.height()) / 2.0;
+                    let inner = outer * 0.45;
+                    let total = (*points as usize) * 2;
+                    let mut pts = Vec::new();
+                    for i in 0..=total {
+                        let ang = i as f32 * std::f32::consts::TAU / total as f32 - std::f32::consts::FRAC_PI_2;
+                        let r = if i % 2 == 0 { outer } else { inner };
+                        let x = cx + r * ang.cos();
+                        let y = cy + r * ang.sin();
+                        pts.push(((x - origin.x) * scale + padding, (y - origin.y) * scale + padding));
+                    }
+                    for w in pts.windows(2) {
+                        draw_segment(&mut img, w[0].0, w[0].1, w[1].0, w[1].1, *width * scale, rgba);
+                    }
+                }
+                Shape::Arrow { start, end, color, width, .. } => {
+                    let rgba = color32_to_rgba(*color);
+                    let x0 = ((start.x - origin.x) * scale + padding) as f32;
+                    let y0 = ((start.y - origin.y) * scale + padding) as f32;
+                    let x1 = ((end.x - origin.x) * scale + padding) as f32;
+                    let y1 = ((end.y - origin.y) * scale + padding) as f32;
+                    draw_segment(&mut img, x0, y0, x1, y1, *width * scale, rgba);
+                }
+            }
+        }
+
+        // Save PNG
+        img.save(&out).map_err(|e| e.to_string())?;
+        self.save_load_status = format!("Export PNG: {}", out.display());
+        Ok(())
     }
 
     // Colle le presse-papiers en décalant les points pour éviter la superposition exacte.
