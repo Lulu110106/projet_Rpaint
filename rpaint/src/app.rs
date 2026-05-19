@@ -193,6 +193,39 @@ impl eframe::App for PaintApp {
                 if ui.button("✂").on_hover_text("Copier").clicked() { self.copy_selected(); }
                 if ui.button("📋").on_hover_text("Coller").clicked() { self.paste(); }
             });
+            ui.horizontal(|ui| {
+                ui.label("Chemin :");
+                ui.text_edit_singleline(&mut self.save_load_file_path);
+            });
+            let project_path = self.save_load_file_path.clone();
+            ui.horizontal(|ui| {
+                if ui.button("💾 Sauvegarder").on_hover_text("Sauvegarder le canvas").clicked() {
+                    if let Err(err) = self.save_project(&project_path) {
+                        self.save_load_status = format!("Erreur sauvegarde : {}", err);
+                    }
+                }
+                if ui.button("📂 Charger").on_hover_text("Charger un canvas").clicked() {
+                    if let Err(err) = self.load_project(&project_path) {
+                        self.save_load_status = format!("Erreur chargement : {}", err);
+                    }
+                }
+
+                if ui.button("📷 Export PNG").on_hover_text("Exporter le canvas en PNG").clicked() {
+                    // export to saves/<name>.png
+                    let png_name = if project_path.ends_with(".rpaint") {
+                        project_path.trim_end_matches(".rpaint").to_string()
+                    } else {
+                        project_path.clone()
+                    };
+                    let png_file = format!("{}.png", png_name);
+                    if let Err(err) = self.export_png(&png_file) {
+                        self.save_load_status = format!("Erreur export PNG : {}", err);
+                    }
+                }
+            });
+            if !self.save_load_status.is_empty() {
+                ui.label(&self.save_load_status);
+            }
 
             ui.separator();
             ui.label("Outils");
@@ -245,6 +278,7 @@ impl eframe::App for PaintApp {
                 egui::Color32::RED,
                 egui::Color32::from_rgb(255, 165, 0), // orange
                 egui::Color32::YELLOW,
+                
                 egui::Color32::GREEN,
                 egui::Color32::BLUE,
                 egui::Color32::from_rgb(128, 0, 128), // violet
@@ -262,7 +296,10 @@ impl eframe::App for PaintApp {
                     && !palette.contains(&self.brush_color)
                     && !self.custom_palette.contains(&self.brush_color)
                 {
-                    self.custom_palette.push(self.brush_color);
+                    self.custom_palette.insert(0, self.brush_color); // Ajoute au début
+                    if self.custom_palette.len() > 12 {
+                        self.custom_palette.pop(); // Supprime le dernier
+                    }
                 }
             });
             ui.horizontal_wrapped(|ui| {
@@ -283,19 +320,29 @@ impl eframe::App for PaintApp {
                 }
             });
             if self.custom_palette.len() != 0 {ui.separator();}
+            let colors: Vec<egui::Color32> = self.custom_palette.clone();
             ui.horizontal_wrapped(|ui| {
-                for color in &self.custom_palette {
+                let mut clicked_color: Option<egui::Color32> = None;
+
+                for color in &colors {
                     let size = egui::vec2(24.0, 24.0);
                     let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
-
                     if self.brush_color == *color {
-                        painter.rect_stroke(response.rect, 2.0, egui::Stroke::new(2.0, egui::Color32::GRAY));
+                        painter.rect_stroke(response.rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
                     }
                     painter.rect_filled(response.rect, 2.0, *color);
-
                     if response.clicked() {
-                        self.brush_color = *color;
+                        clicked_color = Some(*color);
                     }
+                }
+
+                // Mutation après la boucle, borrow immutable libéré
+                if let Some(color) = clicked_color {
+                    if let Some(pos) = self.custom_palette.iter().position(|c| *c == color) {
+                        self.custom_palette.remove(pos);
+                        self.custom_palette.insert(0, color);
+                    }
+                    self.brush_color = color;
                 }
             });
 
