@@ -1,8 +1,218 @@
+use serde::{Deserialize, Serialize};
 use eframe::egui::{ Color32, Pos2, Rect, Vec2};
 use crate::events::NetworkEvent;
 use tokio::task::JoinHandle;
 use tokio::sync::{mpsc, oneshot};
 use crate::layers::{Layer, LayerManager};
+
+// Support de sérialisation pour les types egui non sérialisables.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SerializablePos2 {
+    x: f32,
+    y: f32,
+}
+
+impl From<Pos2> for SerializablePos2 {
+    fn from(value: Pos2) -> Self {
+        Self { x: value.x, y: value.y }
+    }
+}
+
+impl From<SerializablePos2> for Pos2 {
+    fn from(value: SerializablePos2) -> Self {
+        Pos2::new(value.x, value.y)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SerializableColor32 {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl From<Color32> for SerializableColor32 {
+    fn from(value: Color32) -> Self {
+        Self { r: value.r(), g: value.g(), b: value.b(), a: value.a() }
+    }
+}
+
+impl From<SerializableColor32> for Color32 {
+    fn from(value: SerializableColor32) -> Self {
+        Color32::from_rgba_unmultiplied(value.r, value.g, value.b, value.a)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SerializableShape {
+    Line { id: u64, points: Vec<SerializablePos2>, color: SerializableColor32, width: f32 },
+    Rectangle { id: u64, start: SerializablePos2, end: SerializablePos2, color: SerializableColor32, width: f32 },
+    Oval { id: u64, start: SerializablePos2, end: SerializablePos2, color: SerializableColor32, width: f32 },
+    RegularPolygon { id: u64, start: SerializablePos2, end: SerializablePos2, sides: u8, color: SerializableColor32, width: f32 },
+    Star { id: u64, start: SerializablePos2, end: SerializablePos2, points: u8, color: SerializableColor32, width: f32 },
+    Arrow { id: u64, start: SerializablePos2, end: SerializablePos2, color: SerializableColor32, width: f32 },
+}
+
+impl From<&Shape> for SerializableShape {
+    fn from(shape: &Shape) -> Self {
+        match shape {
+            Shape::Line { id, points, color, width } => SerializableShape::Line {
+                id: *id,
+                points: points.iter().cloned().map(SerializablePos2::from).collect(),
+                color: (*color).into(),
+                width: *width,
+            },
+            Shape::Rectangle { id, start, end, color, width } => SerializableShape::Rectangle {
+                id: *id,
+                start: (*start).into(),
+                end: (*end).into(),
+                color: (*color).into(),
+                width: *width,
+            },
+            Shape::Oval { id, start, end, color, width } => SerializableShape::Oval {
+                id: *id,
+                start: (*start).into(),
+                end: (*end).into(),
+                color: (*color).into(),
+                width: *width,
+            },
+            Shape::RegularPolygon { id, start, end, sides, color, width } => SerializableShape::RegularPolygon {
+                id: *id,
+                start: (*start).into(),
+                end: (*end).into(),
+                sides: *sides,
+                color: (*color).into(),
+                width: *width,
+            },
+            Shape::Star { id, start, end, points, color, width } => SerializableShape::Star {
+                id: *id,
+                start: (*start).into(),
+                end: (*end).into(),
+                points: *points,
+                color: (*color).into(),
+                width: *width,
+            },
+            Shape::Arrow { id, start, end, color, width } => SerializableShape::Arrow {
+                id: *id,
+                start: (*start).into(),
+                end: (*end).into(),
+                color: (*color).into(),
+                width: *width,
+            },
+        }
+    }
+}
+
+impl From<SerializableShape> for Shape {
+    fn from(shape: SerializableShape) -> Self {
+        match shape {
+            SerializableShape::Line { id, points, color, width } => Shape::Line {
+                id,
+                points: points.into_iter().map(Pos2::from).collect(),
+                color: color.into(),
+                width,
+            },
+            SerializableShape::Rectangle { id, start, end, color, width } => Shape::Rectangle {
+                id,
+                start: start.into(),
+                end: end.into(),
+                color: color.into(),
+                width,
+            },
+            SerializableShape::Oval { id, start, end, color, width } => Shape::Oval {
+                id,
+                start: start.into(),
+                end: end.into(),
+                color: color.into(),
+                width,
+            },
+            SerializableShape::RegularPolygon { id, start, end, sides, color, width } => Shape::RegularPolygon {
+                id,
+                start: start.into(),
+                end: end.into(),
+                sides,
+                color: color.into(),
+                width,
+            },
+            SerializableShape::Star { id, start, end, points, color, width } => Shape::Star {
+                id,
+                start: start.into(),
+                end: end.into(),
+                points,
+                color: color.into(),
+                width,
+            },
+            SerializableShape::Arrow { id, start, end, color, width } => Shape::Arrow {
+                id,
+                start: start.into(),
+                end: end.into(),
+                color: color.into(),
+                width,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SerializableLayer {
+    pub id: u64,
+    pub name: String,
+    pub visible: bool,
+    pub elements: Vec<SerializableShape>,
+}
+
+impl From<&Layer> for SerializableLayer {
+    fn from(layer: &Layer) -> Self {
+        Self {
+            id: layer.id,
+            name: layer.name.clone(),
+            visible: layer.visible,
+            elements: layer.elements.iter().map(SerializableShape::from).collect(),
+        }
+    }
+}
+
+impl From<SerializableLayer> for Layer {
+    fn from(layer: SerializableLayer) -> Self {
+        Self {
+            id: layer.id,
+            name: layer.name,
+            visible: layer.visible,
+            elements: layer.elements.into_iter().map(Shape::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SerializableLayerManager {
+    pub layers: Vec<SerializableLayer>,
+    pub active_layer_id: u64,
+}
+
+impl From<&LayerManager> for SerializableLayerManager {
+    fn from(manager: &LayerManager) -> Self {
+        Self {
+            layers: manager.layers.iter().map(SerializableLayer::from).collect(),
+            active_layer_id: manager.active_layer_id,
+        }
+    }
+}
+
+impl From<SerializableLayerManager> for LayerManager {
+    fn from(manager: SerializableLayerManager) -> Self {
+        Self {
+            layers: manager.layers.into_iter().map(Layer::from).collect(),
+            active_layer_id: manager.active_layer_id,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PaintProject {
+    pub layer_manager: SerializableLayerManager,
+}
 
 // Mode d'outil actif dans l'interface.
 #[derive(Clone, PartialEq)]
@@ -322,6 +532,8 @@ pub struct PaintApp {
     pub is_dragging_items: bool,
     pub drag_accumulated_delta: Vec2,
     pub custom_palette: Vec<Color32>,
+    pub save_load_status: String,
+    pub save_load_file_path: String,
     pub server_running: bool,
     pub host_name_input: String,
     pub server_shutdown_tx: Option<oneshot::Sender<()>>,
@@ -366,6 +578,8 @@ impl Default for PaintApp {
             is_dragging_items: false,
             drag_accumulated_delta: Vec2::ZERO,
             custom_palette: Vec::new(),
+            save_load_status: String::new(),
+            save_load_file_path: "canvas.rpaint".to_string(),
             server_running: false,
             host_name_input: "Test".to_string(),
             server_shutdown_tx: None,
