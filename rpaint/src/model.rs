@@ -543,6 +543,12 @@ pub struct PaintApp {
     pub client_task: Option<JoinHandle<()>>,
     pub client_shutdown_tx: Option<oneshot::Sender<()>>,
     pub multi_host_mode: bool,
+    pub multi_use_upnp: bool,
+    pub upnp_public_endpoint: String,
+    pub upnp_status: String,
+    pub upnp_mapped_port: Option<u16>,
+    pub net_status_tx: mpsc::UnboundedSender<String>,
+    pub net_status_rx: mpsc::UnboundedReceiver<String>,
     pub incoming_draw_tx: mpsc::UnboundedSender<NetworkEvent>,
     pub incoming_draw_rx: mpsc::UnboundedReceiver<NetworkEvent>,
     pub outgoing_draw_tx: Option<mpsc::UnboundedSender<NetworkEvent>>,
@@ -559,6 +565,7 @@ impl Default for PaintApp {
         // Le canal interne sert à faire remonter les événements réseau
         // vers la boucle d'affichage d'egui.
         let (incoming_draw_tx, incoming_draw_rx) = mpsc::unbounded_channel();
+        let (net_status_tx, net_status_rx) = mpsc::unbounded_channel();
         Self {
             layer_manager: LayerManager::new(),
             undo_stack: Vec::new(),
@@ -590,6 +597,12 @@ impl Default for PaintApp {
             client_task: None,
             client_shutdown_tx: None,
             multi_host_mode: true,
+            multi_use_upnp: false,
+            upnp_public_endpoint: String::new(),
+            upnp_status: String::new(),
+            upnp_mapped_port: None,
+            net_status_tx,
+            net_status_rx,
             incoming_draw_tx,
             incoming_draw_rx,
             outgoing_draw_tx: None,

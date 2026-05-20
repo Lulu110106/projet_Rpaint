@@ -68,6 +68,17 @@ impl eframe::App for PaintApp {
                 }
             }
         }
+        while let Ok(status) = self.net_status_rx.try_recv() {
+            if let Some(endpoint) = status.strip_prefix("UPNP_ENDPOINT:") {
+                self.upnp_public_endpoint = endpoint.to_string();
+                self.upnp_status = "Port forwarding actif".to_string();
+                self.join_host_input = endpoint.to_string();
+            } else if let Some(port) = status.strip_prefix("UPNP_MAPPED_PORT:") {
+                self.upnp_mapped_port = port.parse::<u16>().ok();
+            } else if let Some(msg) = status.strip_prefix("UPNP_STATUS:") {
+                self.upnp_status = msg.to_string();
+            }
+        }
         // Le canvas doit rester fluide même sans interaction utilisateur.
         ctx.request_repaint_after(Duration::from_millis(16));
         if received_any {
@@ -133,6 +144,7 @@ impl eframe::App for PaintApp {
                     ui.selectable_value(&mut self.multi_host_mode, true, "Mode host");
                     ui.selectable_value(&mut self.multi_host_mode, false, "Mode join");
                 });
+                ui.checkbox(&mut self.multi_use_upnp, "WAN auto-forward (UPnP)");
             }
             
             ui.horizontal(|ui| {
@@ -140,6 +152,12 @@ impl eframe::App for PaintApp {
                     ui.vertical(|ui| {
                         ui.label("Pseudo host");
                         ui.text_edit_singleline(&mut self.host_name_input);
+                        if !self.upnp_public_endpoint.is_empty() {
+                            ui.label(format!("Endpoint UPnP: {}", self.upnp_public_endpoint));
+                        }
+                        if !self.upnp_status.is_empty() {
+                            ui.label(format!("UPnP: {}", self.upnp_status));
+                        }
 
                         if self.server_running {
                             ui.label("Serveur en cours de lancement");
@@ -150,6 +168,19 @@ impl eframe::App for PaintApp {
                                 if let Some(task) = self.server_task.take() {
                                     task.abort();
                                 }
+                                if let Some(port) = self.upnp_mapped_port.take() {
+                                    let status_tx = self.net_status_tx.clone();
+                                    tokio::spawn(async move {
+                                        match server::disable_upnp_port_forward(port).await {
+                                            Ok(_) => {
+                                                let _ = status_tx.send("UPNP_STATUS:Port forwarding supprimé".to_string());
+                                            }
+                                            Err(err) => {
+                                                let _ = status_tx.send(format!("UPNP_STATUS:Erreur fermeture mapping: {err}"));
+                                            }
+                                        }
+                                    });
+                                }
                                 server::set_local_draw_sink(None);
                                 self.server_running = false;
                             }
@@ -157,6 +188,8 @@ impl eframe::App for PaintApp {
                             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
                             self.server_shutdown_tx = Some(shutdown_tx);
                             self.server_running = true;
+                            self.upnp_public_endpoint.clear();
+                            self.upnp_status.clear();
                             server::set_local_draw_sink(Some(self.incoming_draw_tx.clone()));
                             let host_name = self.host_name_input.trim().to_owned();
                             let task = tokio::spawn(async move {
@@ -164,11 +197,26 @@ impl eframe::App for PaintApp {
                                 server::run(name, shutdown_rx).await;
                             });
                             self.server_task = Some(task);
+
+                            if self.multi_use_upnp {
+                                let status_tx = self.net_status_tx.clone();
+                                tokio::spawn(async move {
+                                    match server::enable_upnp_port_forward(3000).await {
+                                        Ok((external_ip, port)) => {
+                                            let _ = status_tx.send(format!("UPNP_MAPPED_PORT:{port}"));
+                                            let _ = status_tx.send(format!("UPNP_ENDPOINT:{external_ip}:{port}"));
+                                        }
+                                        Err(err) => {
+                                            let _ = status_tx.send(format!("UPNP_STATUS:{err}"));
+                                        }
+                                    }
+                                });
+                            }
                         }
                     });
                 } else {
                     ui.vertical(|ui| {
-                        ui.label("IP host a joindre");
+                        ui.label("Host à joindre (IP locale ou endpoint UPnP ip:port)");
                         ui.text_edit_singleline(&mut self.join_host_input);
                         ui.label("Pseudo client");
                         ui.text_edit_singleline(&mut self.join_pseudo_input);

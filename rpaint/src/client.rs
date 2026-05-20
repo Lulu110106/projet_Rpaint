@@ -13,13 +13,13 @@ pub async fn run(
     mut outgoing_draw_rx: mpsc::UnboundedReceiver<NetworkEvent>,
 ) {
     let client_id = timestamp_id();
-    // On adapte l'URL selon un usage local ou via un tunnel public.
-    let url = if host_ip.contains("localhost.run") {
-        // Quand le host est exposé sur Internet, on passe en WSS sur le port 443.
-        format!("wss://{}:443/ws", host_ip)
+    // Accepte 3 formats: ws://..., host:port (Bore/WAN), ou host local (port 3000 par défaut).
+    let url = if host_ip.starts_with("ws://") || host_ip.starts_with("wss://") {
+        if host_ip.ends_with("/ws") { host_ip.to_string() } else { format!("{host_ip}/ws") }
+    } else if host_ip.contains(':') {
+        format!("ws://{host_ip}/ws")
     } else {
-        // En local, le serveur tourne en WS simple sur 3000.
-        format!("ws://{}:3000/ws", host_ip)
+        format!("ws://{host_ip}:3000/ws")
     };
     let (ws_stream, _) = match connect_async(&url).await {
         Ok(conn) => conn,

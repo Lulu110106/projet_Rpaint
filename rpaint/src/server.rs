@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 use futures::{SinkExt, StreamExt};
+use igd::PortMappingProtocol;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
 use tokio::sync::mpsc;
@@ -77,6 +78,44 @@ pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
     println!("Serveur arrêté.");
 }
 
+pub async fn enable_upnp_port_forward(local_port: u16) -> Result<(String, u16), String> {
+    tokio::task::spawn_blocking(move || {
+        let local_ip = detect_local_ipv4().ok_or_else(|| "Impossible de détecter l'IP locale".to_string())?;
+        let gateway = igd::search_gateway(Default::default()).map_err(|e| format!("Gateway UPnP introuvable: {e}"))?;
+        let local_addr = std::net::SocketAddrV4::new(local_ip, local_port);
+
+        gateway
+            .add_port(
+                PortMappingProtocol::TCP,
+                local_port,
+                local_addr,
+                0,
+                "rpaint-upnp",
+            )
+            .map_err(|e| format!("Échec ouverture port UPnP: {e}"))?;
+
+        let external_ip = gateway
+            .get_external_ip()
+            .map_err(|e| format!("Échec récupération IP publique: {e}"))?;
+
+        Ok((external_ip.to_string(), local_port))
+    })
+    .await
+    .map_err(|e| format!("Task UPnP interrompue: {e}"))?
+}
+
+pub async fn disable_upnp_port_forward(external_port: u16) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let gateway = igd::search_gateway(Default::default()).map_err(|e| format!("Gateway UPnP introuvable: {e}"))?;
+        gateway
+            .remove_port(PortMappingProtocol::TCP, external_port)
+            .map_err(|e| format!("Échec fermeture port UPnP: {e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task UPnP interrompue: {e}"))?
+}
+
 fn print_local_ip() {
     use std::net::UdpSocket;
     // Ouvrir un socket UDP sans envoyer de paquet force le système à révéler
@@ -133,4 +172,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     }
 
     send_task.abort();
+}
+
+fn detect_local_ipv4() -> Option<std::net::Ipv4Addr> {
+    use std::net::{IpAddr, UdpSocket};
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(v4) => Some(v4),
+        IpAddr::V6(_) => None,
+    }
 }
