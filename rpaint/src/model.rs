@@ -352,7 +352,7 @@ impl Camera {
     pub fn zoom_at(&mut self, factor: f32, pivot: Pos2) {
         self.offset.x = pivot.x - (pivot.x - self.offset.x) * factor;
         self.offset.y = pivot.y - (pivot.y - self.offset.y) * factor;
-        self.zoom = (self.zoom * factor).clamp(0.1, 20.0);
+        self.zoom = (self.zoom * factor).clamp(0.1, 2.0);
     }
 }
 
