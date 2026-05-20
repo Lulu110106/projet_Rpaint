@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::layers::{Layer, LayerManager};
 
 // Support de sérialisation pour les types egui non sérialisables.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct SerializablePos2 {
     x: f32,
     y: f32,
@@ -24,7 +24,7 @@ impl From<SerializablePos2> for Pos2 {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct SerializableColor32 {
     r: u8,
     g: u8,
@@ -44,7 +44,7 @@ impl From<SerializableColor32> for Color32 {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SerializableShape {
     Line { id: u64, points: Vec<SerializablePos2>, color: SerializableColor32, width: f32 },
@@ -155,7 +155,7 @@ impl From<SerializableShape> for Shape {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SerializableLayer {
     pub id: u64,
     pub name: String,
@@ -185,7 +185,7 @@ impl From<SerializableLayer> for Layer {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SerializableLayerManager {
     pub layers: Vec<SerializableLayer>,
     pub active_layer_id: u64,
@@ -209,7 +209,7 @@ impl From<SerializableLayerManager> for LayerManager {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PaintProject {
     pub layer_manager: SerializableLayerManager,
 }
@@ -536,13 +536,21 @@ pub struct PaintApp {
     pub save_load_file_path: String,
     pub server_running: bool,
     pub host_name_input: String,
+    pub host_local_endpoint: String,
     pub server_shutdown_tx: Option<oneshot::Sender<()>>,
     pub server_task: Option<JoinHandle<()>>,
-    pub join_host_input: String,
+    pub join_ip_input: String,
+    pub join_port_input: String,
     pub join_pseudo_input: String,
     pub client_task: Option<JoinHandle<()>>,
     pub client_shutdown_tx: Option<oneshot::Sender<()>>,
     pub multi_host_mode: bool,
+    pub multi_use_upnp: bool,
+    pub upnp_public_endpoint: String,
+    pub upnp_status: String,
+    pub upnp_mapped_port: Option<u16>,
+    pub net_status_tx: mpsc::UnboundedSender<String>,
+    pub net_status_rx: mpsc::UnboundedReceiver<String>,
     pub incoming_draw_tx: mpsc::UnboundedSender<NetworkEvent>,
     pub incoming_draw_rx: mpsc::UnboundedReceiver<NetworkEvent>,
     pub outgoing_draw_tx: Option<mpsc::UnboundedSender<NetworkEvent>>,
@@ -551,6 +559,9 @@ pub struct PaintApp {
     pub layers_panel_rename_text: String,
     pub layers_drag_source: Option<usize>,
     pub last_layer_index: usize,
+    pub host_error_message: String,
+    pub join_error_message: String,
+    pub show_help: bool,
 }
 
 impl Default for PaintApp {
@@ -558,6 +569,7 @@ impl Default for PaintApp {
         // Le canal interne sert à faire remonter les événements réseau
         // vers la boucle d'affichage d'egui.
         let (incoming_draw_tx, incoming_draw_rx) = mpsc::unbounded_channel();
+        let (net_status_tx, net_status_rx) = mpsc::unbounded_channel();
         Self {
             layer_manager: LayerManager::new(),
             undo_stack: Vec::new(),
@@ -581,14 +593,22 @@ impl Default for PaintApp {
             save_load_status: String::new(),
             save_load_file_path: "canvas.rpaint".to_string(),
             server_running: false,
-            host_name_input: "Test".to_string(),
+            host_name_input: String::new(),
+            host_local_endpoint: String::new(),
             server_shutdown_tx: None,
             server_task: None,
-            join_host_input: "127.0.0.1".to_string(),
-            join_pseudo_input: "Guest".to_string(),
+            join_ip_input: "127.0.0.1".to_string(),
+            join_port_input: "3000".to_string(),
+            join_pseudo_input: String::new(),
             client_task: None,
             client_shutdown_tx: None,
             multi_host_mode: true,
+            multi_use_upnp: false,
+            upnp_public_endpoint: String::new(),
+            upnp_status: String::new(),
+            upnp_mapped_port: None,
+            net_status_tx,
+            net_status_rx,
             incoming_draw_tx,
             incoming_draw_rx,
             outgoing_draw_tx: None,
@@ -596,6 +616,9 @@ impl Default for PaintApp {
             layers_panel_rename_text: String::new(),
             layers_drag_source: None,
             last_layer_index: 0,
+            host_error_message: String::new(),
+            join_error_message: String::new(),
+            show_help: false,
         }
     }
 }

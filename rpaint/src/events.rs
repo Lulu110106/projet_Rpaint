@@ -7,6 +7,7 @@ use crate::model::Shape;
 pub enum NetworkEvent {
     DrawShape(DrawShapeEvent),
     DeleteShape(u64), // supprime la ligne identifiée par son id
+    SessionStatus { message: String },
     // Événements pour les layers
     CreateLayer { id: u64, name: String, position: usize },
     DeleteLayer { id: u64 },
@@ -14,6 +15,7 @@ pub enum NetworkEvent {
     SetLayerVisibility { id: u64, visible: bool },
     SetActiveLayer { id: u64 },
     ReorderLayers { from_idx: usize, to_idx: usize },
+    SyncProject { project: crate::model::PaintProject },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
