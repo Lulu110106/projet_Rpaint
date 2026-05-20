@@ -1,21 +1,42 @@
-use serde::{Deserialize, Serialize};
-use eframe::egui::{Color32, Pos2};
 use crate::model::Shape;
+use eframe::egui::{Color32, Pos2};
+use serde::{Deserialize, Serialize};
 
 // Tous les messages réseau passent par cette enveloppe sérialisable.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum NetworkEvent {
     DrawShape(DrawShapeEvent),
     DeleteShape(u64), // supprime la ligne identifiée par son id
-    SessionStatus { message: String },
+    SessionStatus {
+        message: String,
+    },
     // Événements pour les layers
-    CreateLayer { id: u64, name: String, position: usize },
-    DeleteLayer { id: u64 },
-    RenameLayer { id: u64, name: String },
-    SetLayerVisibility { id: u64, visible: bool },
-    SetActiveLayer { id: u64 },
-    ReorderLayers { from_idx: usize, to_idx: usize },
-    SyncProject { project: crate::model::PaintProject },
+    CreateLayer {
+        id: u64,
+        name: String,
+        position: usize,
+    },
+    DeleteLayer {
+        id: u64,
+    },
+    RenameLayer {
+        id: u64,
+        name: String,
+    },
+    SetLayerVisibility {
+        id: u64,
+        visible: bool,
+    },
+    SetActiveLayer {
+        id: u64,
+    },
+    ReorderLayers {
+        from_idx: usize,
+        to_idx: usize,
+    },
+    SyncProject {
+        project: crate::model::PaintProject,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -83,7 +104,11 @@ impl DrawShapeEvent {
 
     // Reconstitue une Shape à partir des données reçues du réseau.
     pub fn to_shape(&self) -> Shape {
-        let points = self.points.iter().map(|p| Pos2::new(p[0], p[1])).collect::<Vec<_>>();
+        let points = self
+            .points
+            .iter()
+            .map(|p| Pos2::new(p[0], p[1]))
+            .collect::<Vec<_>>();
         let c = self.color_rgba;
         let color = Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
 
@@ -97,29 +122,61 @@ impl DrawShapeEvent {
             ShapeType::Rectangle => {
                 let start = points.get(0).cloned().unwrap_or_default();
                 let end = points.get(1).cloned().unwrap_or_default();
-                Shape::Rectangle { id: self.id, start, end, color, width: self.width }
+                Shape::Rectangle {
+                    id: self.id,
+                    start,
+                    end,
+                    color,
+                    width: self.width,
+                }
             }
             ShapeType::Oval => {
                 let start = points.get(0).cloned().unwrap_or_default();
                 let end = points.get(1).cloned().unwrap_or_default();
-                Shape::Oval { id: self.id, start, end, color, width: self.width }
+                Shape::Oval {
+                    id: self.id,
+                    start,
+                    end,
+                    color,
+                    width: self.width,
+                }
             }
             ShapeType::RegularPolygon => {
                 let start = points.get(0).cloned().unwrap_or_default();
                 let end = points.get(1).cloned().unwrap_or_default();
                 let sides = self.sides.unwrap_or(6);
-                Shape::RegularPolygon { id: self.id, start, end, sides, color, width: self.width }
+                Shape::RegularPolygon {
+                    id: self.id,
+                    start,
+                    end,
+                    sides,
+                    color,
+                    width: self.width,
+                }
             }
             ShapeType::Star => {
                 let start = points.get(0).cloned().unwrap_or_default();
                 let end = points.get(1).cloned().unwrap_or_default();
                 let star_points = self.star_points.unwrap_or(5);
-                Shape::Star { id: self.id, start, end, points: star_points, color, width: self.width }
+                Shape::Star {
+                    id: self.id,
+                    start,
+                    end,
+                    points: star_points,
+                    color,
+                    width: self.width,
+                }
             }
             ShapeType::Arrow => {
                 let start = points.get(0).cloned().unwrap_or_default();
                 let end = points.get(1).cloned().unwrap_or_default();
-                Shape::Arrow { id: self.id, start, end, color, width: self.width }
+                Shape::Arrow {
+                    id: self.id,
+                    start,
+                    end,
+                    color,
+                    width: self.width,
+                }
             }
         }
     }

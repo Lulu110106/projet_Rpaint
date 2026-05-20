@@ -1,19 +1,19 @@
 use crate::events::NetworkEvent;
 use crate::model::PaintProject;
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use futures::{SinkExt, StreamExt};
 use igd::PortMappingProtocol;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{broadcast, oneshot};
 use tokio::sync::mpsc;
+use tokio::sync::{broadcast, oneshot};
 
 // État partagé du serveur websocket: un canal broadcast pour redistribuer les dessins.
 struct AppState {
@@ -40,7 +40,10 @@ pub fn set_project_snapshot(project: PaintProject) {
 }
 
 fn get_project_snapshot() -> Option<PaintProject> {
-    GLOBAL_PROJECT.lock().ok().and_then(|snapshot| snapshot.as_ref().cloned())
+    GLOBAL_PROJECT
+        .lock()
+        .ok()
+        .and_then(|snapshot| snapshot.as_ref().cloned())
 }
 
 // Publie n'importe quel NetworkEvent (DrawShape, DeleteShape...) vers tous les clients.
@@ -67,7 +70,10 @@ pub async fn run(_pseudo: &str, initial_project: PaintProject, shutdown: oneshot
     if let Ok(mut global) = GLOBAL_TX.lock() {
         *global = Some(tx.clone());
     }
-    let state = Arc::new(AppState { tx: tx.clone(), shutdown: shutdown_tx.clone() });
+    let state = Arc::new(AppState {
+        tx: tx.clone(),
+        shutdown: shutdown_tx.clone(),
+    });
 
     // Route unique: /ws pour les clients de dessin.
     let app = Router::new()
@@ -99,8 +105,10 @@ pub fn local_endpoint(port: u16) -> Option<String> {
 
 pub async fn enable_upnp_port_forward(local_port: u16) -> Result<(String, u16), String> {
     tokio::task::spawn_blocking(move || {
-        let local_ip = detect_local_ipv4().ok_or_else(|| "Impossible de détecter l'IP locale".to_string())?;
-        let gateway = igd::search_gateway(Default::default()).map_err(|e| format!("Gateway UPnP introuvable: {e}"))?;
+        let local_ip =
+            detect_local_ipv4().ok_or_else(|| "Impossible de détecter l'IP locale".to_string())?;
+        let gateway = igd::search_gateway(Default::default())
+            .map_err(|e| format!("Gateway UPnP introuvable: {e}"))?;
         let local_addr = std::net::SocketAddrV4::new(local_ip, local_port);
 
         gateway
@@ -125,7 +133,8 @@ pub async fn enable_upnp_port_forward(local_port: u16) -> Result<(String, u16), 
 
 pub async fn disable_upnp_port_forward(external_port: u16) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let gateway = igd::search_gateway(Default::default()).map_err(|e| format!("Gateway UPnP introuvable: {e}"))?;
+        let gateway = igd::search_gateway(Default::default())
+            .map_err(|e| format!("Gateway UPnP introuvable: {e}"))?;
         gateway
             .remove_port(PortMappingProtocol::TCP, external_port)
             .map_err(|e| format!("Échec fermeture port UPnP: {e}"))?;
@@ -136,10 +145,7 @@ pub async fn disable_upnp_port_forward(external_port: u16) -> Result<(), String>
 }
 
 // Accepte une nouvelle connexion websocket et bascule le socket dans la boucle de traitement.
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 

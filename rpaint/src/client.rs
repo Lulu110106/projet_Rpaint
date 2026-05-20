@@ -16,7 +16,11 @@ pub async fn run(
     let client_id = timestamp_id();
     // Accepte un host brut + port, ou une URL ws:// / wss:// déjà complète.
     let url = if host_ip.starts_with("ws://") || host_ip.starts_with("wss://") {
-        if host_ip.ends_with("/ws") { host_ip.to_string() } else { format!("{host_ip}/ws") }
+        if host_ip.ends_with("/ws") {
+            host_ip.to_string()
+        } else {
+            format!("{host_ip}/ws")
+        }
     } else {
         format!("ws://{host_ip}:{port}/ws")
     };
@@ -24,7 +28,9 @@ pub async fn run(
         Ok(conn) => conn,
         Err(e) => {
             eprintln!("Connexion échouée: {}", e);
-            let _ = draw_tx.send(NetworkEvent::SessionStatus { message: format!("Connexion impossible: {e}") });
+            let _ = draw_tx.send(NetworkEvent::SessionStatus {
+                message: format!("Connexion impossible: {e}"),
+            });
             return;
         }
     };

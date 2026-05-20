@@ -210,6 +210,106 @@ impl From<SerializableLayerManager> for LayerManager {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SerializableVec2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl From<Vec2> for SerializableVec2 {
+    fn from(vec: Vec2) -> Self {
+        Self { x: vec.x, y: vec.y }
+    }
+}
+
+impl From<SerializableVec2> for Vec2 {
+    fn from(vec: SerializableVec2) -> Self {
+        Vec2::new(vec.x, vec.y)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SerializablePaintAction {
+    Create { shapes: Vec<SerializableShape> },
+    Delete { indices: Vec<usize>, shapes: Vec<SerializableShape> },
+    Modify { indices: Vec<usize>, old_shapes: Vec<SerializableShape>, new_shapes: Vec<SerializableShape> },
+    Move { indices: Vec<usize>, delta: SerializableVec2 },
+    CreateLayer { id: u64, name: String, old_active: u64 },
+    DeleteLayer { id: u64, layer: SerializableLayer, position: usize },
+    RenameLayer { id: u64, old_name: String, new_name: String },
+    SetLayerVisibility { id: u64, visible: bool },
+    ReorderLayers { from_idx: usize, to_idx: usize },
+    SetActiveLayer { old_id: u64, new_id: u64 },
+    NetworkCreateLayer { id: u64, name: String, position: usize },
+    NetworkDeleteLayer { id: u64 },
+    NetworkRenameLayer { id: u64, name: String },
+    NetworkSetLayerVisibility { id: u64, visible: bool },
+    NetworkSetActiveLayer { id: u64 },
+    NetworkReorderLayers { from_idx: usize, to_idx: usize },
+}
+
+impl From<&PaintAction> for SerializablePaintAction {
+    fn from(action: &PaintAction) -> Self {
+        match action {
+            PaintAction::Create(shapes) => SerializablePaintAction::Create { shapes: shapes.iter().map(SerializableShape::from).collect() },
+            PaintAction::Delete(indices, shapes) => SerializablePaintAction::Delete { indices: indices.clone(), shapes: shapes.iter().map(SerializableShape::from).collect() },
+            PaintAction::Modify(indices, old_shapes, new_shapes) => SerializablePaintAction::Modify {
+                indices: indices.clone(),
+                old_shapes: old_shapes.iter().map(SerializableShape::from).collect(),
+                new_shapes: new_shapes.iter().map(SerializableShape::from).collect(),
+            },
+            PaintAction::Move(indices, delta) => SerializablePaintAction::Move { indices: indices.clone(), delta: (*delta).into() },
+            PaintAction::CreateLayer { id, name, old_active } => SerializablePaintAction::CreateLayer { id: *id, name: name.clone(), old_active: *old_active },
+            PaintAction::DeleteLayer { id, layer, position } => SerializablePaintAction::DeleteLayer { id: *id, layer: SerializableLayer::from(layer), position: *position },
+            PaintAction::RenameLayer { id, old_name, new_name } => SerializablePaintAction::RenameLayer { id: *id, old_name: old_name.clone(), new_name: new_name.clone() },
+            PaintAction::SetLayerVisibility { id, visible } => SerializablePaintAction::SetLayerVisibility { id: *id, visible: *visible },
+            PaintAction::ReorderLayers { from_idx, to_idx } => SerializablePaintAction::ReorderLayers { from_idx: *from_idx, to_idx: *to_idx },
+            PaintAction::SetActiveLayer { old_id, new_id } => SerializablePaintAction::SetActiveLayer { old_id: *old_id, new_id: *new_id },
+            PaintAction::NetworkCreateLayer { id, name, position } => SerializablePaintAction::NetworkCreateLayer { id: *id, name: name.clone(), position: *position },
+            PaintAction::NetworkDeleteLayer { id } => SerializablePaintAction::NetworkDeleteLayer { id: *id },
+            PaintAction::NetworkRenameLayer { id, name } => SerializablePaintAction::NetworkRenameLayer { id: *id, name: name.clone() },
+            PaintAction::NetworkSetLayerVisibility { id, visible } => SerializablePaintAction::NetworkSetLayerVisibility { id: *id, visible: *visible },
+            PaintAction::NetworkSetActiveLayer { id } => SerializablePaintAction::NetworkSetActiveLayer { id: *id },
+            PaintAction::NetworkReorderLayers { from_idx, to_idx } => SerializablePaintAction::NetworkReorderLayers { from_idx: *from_idx, to_idx: *to_idx },
+        }
+    }
+}
+
+impl From<SerializablePaintAction> for PaintAction {
+    fn from(action: SerializablePaintAction) -> Self {
+        match action {
+            SerializablePaintAction::Create { shapes } => PaintAction::Create(shapes.into_iter().map(Shape::from).collect()),
+            SerializablePaintAction::Delete { indices, shapes } => PaintAction::Delete(indices, shapes.into_iter().map(Shape::from).collect()),
+            SerializablePaintAction::Modify { indices, old_shapes, new_shapes } => PaintAction::Modify(
+                indices,
+                old_shapes.into_iter().map(Shape::from).collect(),
+                new_shapes.into_iter().map(Shape::from).collect(),
+            ),
+            SerializablePaintAction::Move { indices, delta } => PaintAction::Move(indices, delta.into()),
+            SerializablePaintAction::CreateLayer { id, name, old_active } => PaintAction::CreateLayer { id, name, old_active },
+            SerializablePaintAction::DeleteLayer { id, layer, position } => PaintAction::DeleteLayer { id, layer: Layer::from(layer), position },
+            SerializablePaintAction::RenameLayer { id, old_name, new_name } => PaintAction::RenameLayer { id, old_name, new_name },
+            SerializablePaintAction::SetLayerVisibility { id, visible } => PaintAction::SetLayerVisibility { id, visible },
+            SerializablePaintAction::ReorderLayers { from_idx, to_idx } => PaintAction::ReorderLayers { from_idx, to_idx },
+            SerializablePaintAction::SetActiveLayer { old_id, new_id } => PaintAction::SetActiveLayer { old_id, new_id },
+            SerializablePaintAction::NetworkCreateLayer { id, name, position } => PaintAction::NetworkCreateLayer { id, name, position },
+            SerializablePaintAction::NetworkDeleteLayer { id } => PaintAction::NetworkDeleteLayer { id },
+            SerializablePaintAction::NetworkRenameLayer { id, name } => PaintAction::NetworkRenameLayer { id, name },
+            SerializablePaintAction::NetworkSetLayerVisibility { id, visible } => PaintAction::NetworkSetLayerVisibility { id, visible },
+            SerializablePaintAction::NetworkSetActiveLayer { id } => PaintAction::NetworkSetActiveLayer { id },
+            SerializablePaintAction::NetworkReorderLayers { from_idx, to_idx } => PaintAction::NetworkReorderLayers { from_idx, to_idx },
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SavedPaintProject {
+    pub layer_manager: SerializableLayerManager,
+    pub undo_stack: Vec<SerializablePaintAction>,
+    pub redo_stack: Vec<SerializablePaintAction>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PaintProject {
     pub layer_manager: SerializableLayerManager,
 }

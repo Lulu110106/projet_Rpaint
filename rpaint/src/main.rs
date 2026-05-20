@@ -1,11 +1,11 @@
-mod events;
-mod model;
-mod logic;
-mod ui_tools;
 mod app;
-mod server;
 mod client;
+mod events;
 mod layers;
+mod logic;
+mod model;
+mod server;
+mod ui_tools;
 
 use model::PaintApp;
 

@@ -88,8 +88,10 @@ impl PaintApp {
     }
 
     pub fn save_project(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
-        let project = PaintProject {
+        let project = SavedPaintProject {
             layer_manager: (&self.layer_manager).into(),
+            undo_stack: self.undo_stack.iter().map(SerializablePaintAction::from).collect(),
+            redo_stack: self.redo_stack.iter().map(SerializablePaintAction::from).collect(),
         };
         let file = File::create(&path).map_err(|e| e.to_string())?;
         serde_json::to_writer_pretty(file, &project).map_err(|e| e.to_string())?;
@@ -100,11 +102,11 @@ impl PaintApp {
     pub fn load_project(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let file = File::open(&path).map_err(|e| e.to_string())?;
         let reader = BufReader::new(file);
-        let project: PaintProject = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
+        let project: SavedPaintProject = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
         self.layer_manager = project.layer_manager.into();
         self.last_layer_index = self.layer_manager.layers.len();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.undo_stack = project.undo_stack.into_iter().map(PaintAction::from).collect();
+        self.redo_stack = project.redo_stack.into_iter().map(PaintAction::from).collect();
         self.selected_indices.clear();
         self.current_line.clear();
         self.active_stroke_id = None;

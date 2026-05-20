@@ -6,6 +6,7 @@ use crate::server;
 use crate::client;
 use crate::events::{DrawShapeEvent, NetworkEvent};
 use crate::model::timestamp_id;
+use rfd::FileDialog;
 use std::time::Duration;
 
 
@@ -304,7 +305,26 @@ impl eframe::App for PaintApp {
             });
             ui.horizontal(|ui| {
                 ui.label("Chemin :");
-                ui.text_edit_singleline(&mut self.save_load_file_path);
+                ui.add(egui::TextEdit::singleline(&mut self.save_load_file_path).desired_width(180.0));
+                if ui.button("📁").on_hover_text("Choisir un fichier").clicked() {
+                    let mut dialog = FileDialog::new().add_filter("RPaint", &["rpaint"]);
+                    let path = std::path::Path::new(&self.save_load_file_path);
+                    if let Some(parent) = path.parent() {
+                        dialog = dialog.set_directory(parent);
+                    }
+                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        dialog = dialog.set_file_name(file_name);
+                    }
+                    if let Some(path) = dialog.save_file() {
+                        if let Some(path_str) = path.to_str() {
+                            let selected_path = path_str.to_string();
+                            self.save_load_file_path = selected_path.clone();
+                            if let Err(err) = self.save_project(&selected_path) {
+                                self.save_load_status = format!("Erreur sauvegarde : {}", err);
+                            }
+                        }
+                    }
+                }
             });
             let project_path = self.save_load_file_path.clone();
             ui.horizontal(|ui| {

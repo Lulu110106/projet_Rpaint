@@ -69,7 +69,9 @@ impl LayerManager {
 
     /// Retourne le layer actif mutable
     pub fn get_active_layer_mut(&mut self) -> Option<&mut Layer> {
-        self.layers.iter_mut().find(|l| l.id == self.active_layer_id)
+        self.layers
+            .iter_mut()
+            .find(|l| l.id == self.active_layer_id)
     }
 
     /// Retourne le layer par ID
@@ -164,5 +166,4 @@ impl LayerManager {
         }
         elements
     }
-
 }
