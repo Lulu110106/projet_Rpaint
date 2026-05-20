@@ -774,7 +774,8 @@ impl eframe::App for PaintApp {
                 }
             }
 
-            if response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary) {
+            let is_pan = response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary);
+            if is_pan {
                 self.camera.offset += response.drag_delta();
             }
 
@@ -782,7 +783,7 @@ impl eframe::App for PaintApp {
                 let pos = to_world(&self.camera, screen_pos);
                 match self.mode {
                     BrushMode::Freehand | BrushMode::Shape => {
-                        if response.dragged() {
+                        if response.dragged() && !is_pan {
                             if self.current_line.is_empty() {
                                 self.active_stroke_id = Some(timestamp_id());
                                 self.current_line.push(pos);
