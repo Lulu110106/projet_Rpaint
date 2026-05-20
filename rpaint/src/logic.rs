@@ -16,6 +16,12 @@ impl PaintApp {
         }
     }
 
+    fn sync_project_snapshot(&self) {
+        server::set_project_snapshot(PaintProject {
+            layer_manager: (&self.layer_manager).into(),
+        });
+    }
+
     // --- UTILITAIRES POUR ACCÉDER AUX ÉLÉMENTS DU LAYER ACTIF ---
 
     /// Retourne les indices corrigés pour le layer actif
@@ -96,6 +102,7 @@ impl PaintApp {
         let reader = BufReader::new(file);
         let project: PaintProject = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
         self.layer_manager = project.layer_manager.into();
+        self.last_layer_index = self.layer_manager.layers.len();
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.selected_indices.clear();
@@ -105,7 +112,22 @@ impl PaintApp {
         self.selection_rect = None;
         self.current_lasso.clear();
         self.save_load_status = format!("Chargé depuis {}", path.as_ref().display());
+        self.sync_project_snapshot();
         Ok(())
+    }
+
+    pub fn replace_project(&mut self, project: PaintProject) {
+        self.layer_manager = project.layer_manager.into();
+        self.last_layer_index = self.layer_manager.layers.len();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.selected_indices.clear();
+        self.current_line.clear();
+        self.active_stroke_id = None;
+        self.selection_start_pos = None;
+        self.selection_rect = None;
+        self.current_lasso.clear();
+        self.sync_project_snapshot();
     }
 
     /// Export the currently visible canvas to a PNG file inside `saves/` (if no folder provided).
@@ -489,6 +511,7 @@ impl PaintApp {
                 self.layer_manager.reorder_layer(*from_idx, *to_idx);
             }
         }
+        self.sync_project_snapshot();
     }
 
     // Annule la dernière action enregistrée.
@@ -599,6 +622,7 @@ impl PaintApp {
             }
             self.redo_stack.push(action);
             self.selected_indices.clear();
+            self.sync_project_snapshot();
         }
     }
 
@@ -658,6 +682,7 @@ impl PaintApp {
             }
 
             self.undo_stack.push(action);
+            self.sync_project_snapshot();
         }
     }
 

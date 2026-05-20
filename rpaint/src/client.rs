@@ -7,24 +7,24 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 // Boucle client websocket: envoie les traits dessinés localement et reçoit ceux du host.
 pub async fn run(
     host_ip: &str,
+    port: u16,
     _pseudo: &str,
     mut shutdown: oneshot::Receiver<()>,
     draw_tx: mpsc::UnboundedSender<NetworkEvent>,
     mut outgoing_draw_rx: mpsc::UnboundedReceiver<NetworkEvent>,
 ) {
     let client_id = timestamp_id();
-    // Accepte 3 formats: ws://..., host:port (Bore/WAN), ou host local (port 3000 par défaut).
+    // Accepte un host brut + port, ou une URL ws:// / wss:// déjà complète.
     let url = if host_ip.starts_with("ws://") || host_ip.starts_with("wss://") {
         if host_ip.ends_with("/ws") { host_ip.to_string() } else { format!("{host_ip}/ws") }
-    } else if host_ip.contains(':') {
-        format!("ws://{host_ip}/ws")
     } else {
-        format!("ws://{host_ip}:3000/ws")
+        format!("ws://{host_ip}:{port}/ws")
     };
     let (ws_stream, _) = match connect_async(&url).await {
         Ok(conn) => conn,
         Err(e) => {
             eprintln!("Connexion échouée: {}", e);
+            let _ = draw_tx.send(NetworkEvent::SessionStatus { message: format!("Connexion impossible: {e}") });
             return;
         }
     };
@@ -71,10 +71,12 @@ pub async fn run(
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
                         eprintln!("Erreur websocket client: {}", e);
+                        let _ = draw_tx.send(NetworkEvent::SessionStatus { message: "Le host s'est déconnecté".to_string() });
                         break;
                     }
                     None => {
                         println!("Host déconnecté.");
+                        let _ = draw_tx.send(NetworkEvent::SessionStatus { message: "Le host s'est déconnecté".to_string() });
                         break;
                     }
                 }

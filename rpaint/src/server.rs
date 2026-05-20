@@ -1,4 +1,5 @@
 use crate::events::NetworkEvent;
+use crate::model::PaintProject;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -17,17 +18,29 @@ use tokio::sync::mpsc;
 // État partagé du serveur websocket: un canal broadcast pour redistribuer les dessins.
 struct AppState {
     tx: broadcast::Sender<String>,
+    shutdown: broadcast::Sender<()>,
 }
 
 // Références globales pour brancher l'UI locale au serveur sans passer par une architecture plus lourde.
 static GLOBAL_TX: Mutex<Option<broadcast::Sender<String>>> = Mutex::new(None);
 static GLOBAL_LOCAL_DRAW_TX: Mutex<Option<mpsc::UnboundedSender<NetworkEvent>>> = Mutex::new(None);
+static GLOBAL_PROJECT: Mutex<Option<PaintProject>> = Mutex::new(None);
 
 // Permet d'activer ou de désactiver l'envoi direct vers le canvas local.
 pub fn set_local_draw_sink(tx: Option<mpsc::UnboundedSender<NetworkEvent>>) {
     if let Ok(mut sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
         *sink = tx;
     }
+}
+
+pub fn set_project_snapshot(project: PaintProject) {
+    if let Ok(mut snapshot) = GLOBAL_PROJECT.lock() {
+        *snapshot = Some(project);
+    }
+}
+
+fn get_project_snapshot() -> Option<PaintProject> {
+    GLOBAL_PROJECT.lock().ok().and_then(|snapshot| snapshot.as_ref().cloned())
 }
 
 // Publie n'importe quel NetworkEvent (DrawShape, DeleteShape...) vers tous les clients.
@@ -47,14 +60,14 @@ pub fn publish_network_event(event: NetworkEvent) -> bool {
 }
 
 // Lance le serveur websocket local sur le port 3000.
-pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
+pub async fn run(_pseudo: &str, initial_project: PaintProject, shutdown: oneshot::Receiver<()>) {
     let (tx, _) = broadcast::channel::<String>(256);
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+    set_project_snapshot(initial_project);
     if let Ok(mut global) = GLOBAL_TX.lock() {
         *global = Some(tx.clone());
     }
-    let state = Arc::new(AppState { tx: tx.clone() });
-
-    print_local_ip();
+    let state = Arc::new(AppState { tx: tx.clone(), shutdown: shutdown_tx.clone() });
 
     // Route unique: /ws pour les clients de dessin.
     let app = Router::new()
@@ -64,8 +77,10 @@ pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Serveur local démarré sur le port 3000");
 
-    let server = axum::serve(listener, app).with_graceful_shutdown(async {
+    let shutdown_tx_for_graceful_shutdown = shutdown_tx.clone();
+    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
         let _ = shutdown.await;
+        let _ = shutdown_tx_for_graceful_shutdown.send(());
         println!("Arrêt du serveur demandé...");
     });
 
@@ -76,6 +91,10 @@ pub async fn run(_pseudo: &str, shutdown: oneshot::Receiver<()>) {
         *global = None;
     }
     println!("Serveur arrêté.");
+}
+
+pub fn local_endpoint(port: u16) -> Option<String> {
+    detect_local_ipv4().map(|ip| format!("{}:{}", ip, port))
 }
 
 pub async fn enable_upnp_port_forward(local_port: u16) -> Result<(String, u16), String> {
@@ -116,24 +135,6 @@ pub async fn disable_upnp_port_forward(external_port: u16) -> Result<(), String>
     .map_err(|e| format!("Task UPnP interrompue: {e}"))?
 }
 
-fn print_local_ip() {
-    use std::net::UdpSocket;
-    // Ouvrir un socket UDP sans envoyer de paquet force le système à révéler
-    // l'interface réseau choisie pour sortir vers internet.
-    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(addr) = socket.local_addr() {
-                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                println!("  IP locale : {}", addr.ip());
-                println!("  Les clients du même réseau lancent :");
-                println!("  cargo run -- --join {} <pseudo>", addr.ip());
-                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-            }
-        }
-    }
-}
-
-
 // Accepte une nouvelle connexion websocket et bascule le socket dans la boucle de traitement.
 async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -146,32 +147,53 @@ async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.tx.subscribe();
+    let mut shutdown_rx = state.shutdown.subscribe();
 
-    // Un task séparé pousse les messages broadcast vers ce socket particulier.
-    let send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg)).await.is_err() {
+    if let Some(project) = get_project_snapshot() {
+        if let Ok(payload) = serde_json::to_string(&NetworkEvent::SyncProject { project }) {
+            let _ = sender.send(Message::Text(payload)).await;
+        }
+    }
+
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Ok(msg) => {
+                        if sender.send(Message::Text(msg)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            incoming = receiver.next() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        // Si le client a envoyé un événement réseau (DrawShape / DeleteShape),
+                        // on le transmet d'abord au canvas local via le sink (pour que l'UI
+                        // applique la modification sans l'enregistrer dans undo), puis on
+                        // rebroadcast l'événement à tous les clients.
+                        if let Ok(ev) = serde_json::from_str::<NetworkEvent>(&text) {
+                            if let Ok(sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
+                                if let Some(tx) = sink.as_ref() {
+                                    let _ = tx.send(ev.clone());
+                                }
+                            }
+                        }
+                        let _ = state.tx.send(text);
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                let _ = sender.send(Message::Close(None)).await;
                 break;
             }
         }
-    });
-
-    while let Some(Ok(Message::Text(text))) = receiver.next().await {
-        // Si le client a envoyé un événement réseau (DrawShape / DeleteShape),
-        // on le transmet d'abord au canvas local via le sink (pour que l'UI
-        // applique la modification sans l'enregistrer dans undo), puis on
-        // rebroadcast l'événement à tous les clients.
-        if let Ok(ev) = serde_json::from_str::<NetworkEvent>(&text) {
-            if let Ok(sink) = GLOBAL_LOCAL_DRAW_TX.lock() {
-                if let Some(tx) = sink.as_ref() {
-                    let _ = tx.send(ev.clone());
-                }
-            }
-        }
-        let _ = state.tx.send(text);
     }
-
-    send_task.abort();
 }
 
 fn detect_local_ipv4() -> Option<std::net::Ipv4Addr> {

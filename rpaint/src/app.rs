@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, Rect, Shape, Stroke, Vec2};
-use crate::model::{Camera, PaintApp, BrushMode, PaintAction, ShapeKind, SelectionMode};
+use crate::model::{Camera, PaintApp, BrushMode, PaintAction, PaintProject, ShapeKind, SelectionMode};
 use crate::model::Shape as PaintShape;
 use crate::ui_tools::{draw_dashed_rect, draw_ellipse, draw_regular_polygon, draw_star, draw_arrow, draw_lasso, is_shape_in_lasso};
 use crate::server;
@@ -15,6 +15,14 @@ impl eframe::App for PaintApp {
         let mut received_any = false;
         while let Ok(ev) = self.incoming_draw_rx.try_recv() {
             match ev {
+                NetworkEvent::SyncProject { project } => {
+                    self.replace_project(project);
+                    received_any = true;
+                }
+                NetworkEvent::SessionStatus { message } => {
+                    self.join_error_message = message;
+                    received_any = true;
+                }
                 NetworkEvent::DrawShape(draw) => {
                     let shape = draw.to_shape();
                     // Ajouter au layer actif
@@ -72,7 +80,12 @@ impl eframe::App for PaintApp {
             if let Some(endpoint) = status.strip_prefix("UPNP_ENDPOINT:") {
                 self.upnp_public_endpoint = endpoint.to_string();
                 self.upnp_status = "Port forwarding actif".to_string();
-                self.join_host_input = endpoint.to_string();
+                if let Some((ip, port)) = endpoint.rsplit_once(':') {
+                    self.join_ip_input = ip.to_string();
+                    self.join_port_input = port.to_string();
+                } else {
+                    self.join_ip_input = endpoint.to_string();
+                }
             } else if let Some(port) = status.strip_prefix("UPNP_MAPPED_PORT:") {
                 self.upnp_mapped_port = port.parse::<u16>().ok();
             } else if let Some(msg) = status.strip_prefix("UPNP_STATUS:") {
@@ -108,10 +121,6 @@ impl eframe::App for PaintApp {
                         self.show_help = true;
                         ui.close_menu();
                     }
-                    if ui.button("Raccourcis clavier").clicked() {
-                        self.show_help = true;
-                        ui.close_menu();
-                    }
                 });
             });
         });
@@ -128,6 +137,10 @@ impl eframe::App for PaintApp {
                 self.client_task = None;
                 self.client_shutdown_tx = None;
                 self.outgoing_draw_tx = None;
+            }
+            if self.server_task.as_ref().is_some_and(|task| task.is_finished()) {
+                self.server_task = None;
+                self.server_shutdown_tx = None;
             }
             let client_connected = self.client_task.is_some();
 
@@ -151,22 +164,26 @@ impl eframe::App for PaintApp {
                 if self.multi_host_mode {
                     ui.vertical(|ui| {
                         ui.label("Pseudo host");
-                        ui.text_edit_singleline(&mut self.host_name_input);
+                        ui.add(egui::TextEdit::singleline(&mut self.host_name_input).hint_text("entrer un pseudo"));
+                        if self.server_running && !self.host_local_endpoint.is_empty() {
+                            ui.label(format!("IP locale: {}", self.host_local_endpoint));
+                        }
                         if !self.upnp_public_endpoint.is_empty() {
-                            ui.label(format!("Endpoint UPnP: {}", self.upnp_public_endpoint));
+                            ui.label(format!("IP public: {}", self.upnp_public_endpoint));
                         }
                         if !self.upnp_status.is_empty() {
                             ui.label(format!("UPnP: {}", self.upnp_status));
                         }
+                        if !self.host_error_message.is_empty() {
+                            ui.colored_label(egui::Color32::RED, &self.host_error_message);
+                        }
+                        
 
                         if self.server_running {
                             ui.label("Serveur en cours de lancement");
                             if ui.button("stop").on_hover_text("Arrêter le serveur").clicked() {
                                 if let Some(tx) = self.server_shutdown_tx.take() {
                                     let _ = tx.send(());
-                                }
-                                if let Some(task) = self.server_task.take() {
-                                    task.abort();
                                 }
                                 if let Some(port) = self.upnp_mapped_port.take() {
                                     let status_tx = self.net_status_tx.clone();
@@ -183,44 +200,60 @@ impl eframe::App for PaintApp {
                                 }
                                 server::set_local_draw_sink(None);
                                 self.server_running = false;
+                                self.host_local_endpoint.clear();
                             }
                         } else if ui.button("host").on_hover_text("Héberger un canvas").clicked() {
-                            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                            self.server_shutdown_tx = Some(shutdown_tx);
-                            self.server_running = true;
-                            self.upnp_public_endpoint.clear();
-                            self.upnp_status.clear();
-                            server::set_local_draw_sink(Some(self.incoming_draw_tx.clone()));
-                            let host_name = self.host_name_input.trim().to_owned();
-                            let task = tokio::spawn(async move {
-                                let name = if host_name.is_empty() { "Host" } else { &host_name };
-                                server::run(name, shutdown_rx).await;
-                            });
-                            self.server_task = Some(task);
-
-                            if self.multi_use_upnp {
-                                let status_tx = self.net_status_tx.clone();
-                                tokio::spawn(async move {
-                                    match server::enable_upnp_port_forward(3000).await {
-                                        Ok((external_ip, port)) => {
-                                            let _ = status_tx.send(format!("UPNP_MAPPED_PORT:{port}"));
-                                            let _ = status_tx.send(format!("UPNP_ENDPOINT:{external_ip}:{port}"));
-                                        }
-                                        Err(err) => {
-                                            let _ = status_tx.send(format!("UPNP_STATUS:{err}"));
-                                        }
-                                    }
+                            if self.host_name_input.trim().is_empty() {
+                                self.host_error_message = "Veuillez entrer un pseudo".to_string();
+                            } else {
+                                self.host_error_message.clear();
+                                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                                self.server_shutdown_tx = Some(shutdown_tx);
+                                self.server_running = true;
+                                self.host_local_endpoint = server::local_endpoint(3000)
+                                    .unwrap_or_else(|| "IP locale indisponible".to_string());
+                                self.upnp_public_endpoint.clear();
+                                self.upnp_status.clear();
+                                server::set_local_draw_sink(Some(self.incoming_draw_tx.clone()));
+                                let host_name = self.host_name_input.trim().to_owned();
+                                let project = PaintProject {
+                                    layer_manager: (&self.layer_manager).into(),
+                                };
+                                let task = tokio::spawn(async move {
+                                    let name = if host_name.is_empty() { "Host" } else { &host_name };
+                                    server::run(name, project, shutdown_rx).await;
                                 });
+                                self.server_task = Some(task);
+
+                                if self.multi_use_upnp {
+                                    let status_tx = self.net_status_tx.clone();
+                                    tokio::spawn(async move {
+                                        match server::enable_upnp_port_forward(3000).await {
+                                            Ok((external_ip, port)) => {
+                                                let _ = status_tx.send(format!("UPNP_MAPPED_PORT:{port}"));
+                                                let _ = status_tx.send(format!("UPNP_ENDPOINT:{external_ip}:{port}"));
+                                            }
+                                            Err(err) => {
+                                                let _ = status_tx.send(format!("UPNP_STATUS:{err}"));
+                                            }
+                                        }
+                                    });
+                                }
                             }
                         }
                     });
                 } else {
                     ui.vertical(|ui| {
-                        ui.label("Host à joindre (IP locale ou endpoint UPnP ip:port)");
-                        ui.text_edit_singleline(&mut self.join_host_input);
+                        ui.label("IP host à joindre");
+                        ui.text_edit_singleline(&mut self.join_ip_input);
+                        ui.label("Port");
+                        ui.text_edit_singleline(&mut self.join_port_input);
+                        
                         ui.label("Pseudo client");
-                        ui.text_edit_singleline(&mut self.join_pseudo_input);
-
+                        ui.add(egui::TextEdit::singleline(&mut self.join_pseudo_input).hint_text("entrer un pseudo"));
+                        if !self.join_error_message.is_empty() {
+                            ui.colored_label(egui::Color32::RED, &self.join_error_message);
+                        }
                         if client_connected {
                             if ui.button("leave").on_hover_text("Quitter le canvas rejoint").clicked() {
                                 if let Some(tx) = self.client_shutdown_tx.take() {
@@ -232,19 +265,25 @@ impl eframe::App for PaintApp {
                                 self.outgoing_draw_tx = None;
                             }
                         } else if ui.button("join").on_hover_text("Rejoindre un canvas").clicked() {
-                            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                            self.client_shutdown_tx = Some(shutdown_tx);
-                            let (outgoing_draw_tx, outgoing_draw_rx) = tokio::sync::mpsc::unbounded_channel();
-                            self.outgoing_draw_tx = Some(outgoing_draw_tx);
-                            let host_ip = self.join_host_input.trim().to_owned();
-                            let pseudo = self.join_pseudo_input.trim().to_owned();
-                            let incoming_draw_tx = self.incoming_draw_tx.clone();
-                            let task = tokio::spawn(async move {
-                                let host = if host_ip.is_empty() { "127.0.0.1" } else { &host_ip };
-                                let name = if pseudo.is_empty() { "Guest" } else { &pseudo };
-                                client::run(host, name, shutdown_rx, incoming_draw_tx, outgoing_draw_rx).await;
-                            });
-                            self.client_task = Some(task);
+                            if self.join_pseudo_input.trim().is_empty() {
+                                self.join_error_message = "Veuillez entrer un pseudo".to_string();
+                            } else {
+                                self.join_error_message.clear();
+                                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                                self.client_shutdown_tx = Some(shutdown_tx);
+                                let (outgoing_draw_tx, outgoing_draw_rx) = tokio::sync::mpsc::unbounded_channel();
+                                self.outgoing_draw_tx = Some(outgoing_draw_tx);
+                                let host_ip = self.join_ip_input.trim().to_owned();
+                                let host_port = self.join_port_input.trim().parse::<u16>().unwrap_or(3000);
+                                let pseudo = self.join_pseudo_input.trim().to_owned();
+                                let incoming_draw_tx = self.incoming_draw_tx.clone();
+                                let task = tokio::spawn(async move {
+                                    let host = if host_ip.is_empty() { "127.0.0.1" } else { &host_ip };
+                                    let name = if pseudo.is_empty() { "Guest" } else { &pseudo };
+                                    client::run(host, host_port, name, shutdown_rx, incoming_draw_tx, outgoing_draw_rx).await;
+                                });
+                                self.client_task = Some(task);
+                            }
                         }
                     });
                 }
@@ -680,8 +719,9 @@ impl eframe::App for PaintApp {
                 ui.label("- Supprimer : touche Delete / Backspace");
                 ui.separator();
                 ui.heading("Réseau (Multi)");
-                ui.label("- Héberger : Mode host → 'host'.");
-                ui.label("- Rejoindre : Mode join → 'join'.");
+                ui.label("- Mode host : entrez un pseudo et cliquez 'host' pour héberger un canvas.");
+                ui.label("- Mode join : entrez une IP, un port, un pseudo et cliquez 'join' pour vous connecter.");
+                ui.label("- Le pseudo est obligatoire pour lancer host ou join.");
                 ui.separator();
                 if ui.button("Fermer").clicked() { close_requested = true; }
             });
