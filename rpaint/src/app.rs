@@ -83,6 +83,28 @@ impl eframe::App for PaintApp {
             else if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) { self.delete_selected(); }
         });
 
+        // --- Menu principal (Top) ---
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("Fichier", |ui| {
+                    if ui.button("Quitter").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+
+                ui.menu_button("Aide", |ui| {
+                    if ui.button("Afficher l'aide").clicked() {
+                        self.show_help = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Raccourcis clavier").clicked() {
+                        self.show_help = true;
+                        ui.close_menu();
+                    }
+                });
+            });
+        });
+
         // --- 2. BARRE D'OUTILS (GAUCHE) ---
         egui::SidePanel::left("toolbar").show(ctx, |ui| {
             ui.heading("🎨 RPaint");
@@ -591,6 +613,32 @@ impl eframe::App for PaintApp {
                     self.reorder_layers(from, to);
                 }
             });
+
+        // Fenêtre d'aide
+        if self.show_help {
+            let mut show_help = self.show_help;
+            let mut close_requested = false;
+            egui::Window::new("Aide — RPaint").open(&mut show_help).show(ctx, |ui| {
+                ui.label("Bienvenue dans RPaint — guide rapide pour commencer :");
+                ui.separator();
+                ui.heading("Outils");
+                ui.label("- Sélectionnez les outils depuis la barre de gauche.");
+                ui.label("- Dessiner : choisissez '✏ Dessin' puis tracez avec la souris.");
+                ui.label("- Formes : utilisez 'Changer forme' pour sélectionner une forme.");
+                ui.separator();
+                ui.heading("Sélection & édition");
+                ui.label("- Copier/Coller : Ctrl+C, Ctrl+V");
+                ui.label("- Annuler/Rétablir : Ctrl+Z, Ctrl+Shift+Z");
+                ui.label("- Supprimer : touche Delete / Backspace");
+                ui.separator();
+                ui.heading("Réseau (Multi)");
+                ui.label("- Héberger : Mode host → 'host'.");
+                ui.label("- Rejoindre : Mode join → 'join'.");
+                ui.separator();
+                if ui.button("Fermer").clicked() { close_requested = true; }
+            });
+            self.show_help = show_help && !close_requested;
+        }
 
         // --- 3. ZONE DE DESSIN (CENTRE) ---
         egui::CentralPanel::default().show(ctx, |ui| {

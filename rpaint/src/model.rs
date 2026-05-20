@@ -551,6 +551,7 @@ pub struct PaintApp {
     pub layers_panel_rename_text: String,
     pub layers_drag_source: Option<usize>,
     pub last_layer_index: usize,
+    pub show_help: bool,
 }
 
 impl Default for PaintApp {
@@ -596,6 +597,7 @@ impl Default for PaintApp {
             layers_panel_rename_text: String::new(),
             layers_drag_source: None,
             last_layer_index: 0,
+            show_help: false,
         }
     }
 }
